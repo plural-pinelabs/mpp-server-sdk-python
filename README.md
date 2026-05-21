@@ -1,6 +1,6 @@
-# plural-mpp-seller-sdk (Python)
+# pinelabs-online-mpp-seller-sdk (Python)
 
-Python port of [`@plural/mpp-seller-sdk`](../mpp-seller-sdk). x402
+Python port of [`@pinelabs-online/mpp-seller-sdk`](../mpp-seller-sdk). x402
 Machine Payments Protocol server-side SDK for monetising API endpoints.
 
 Issues HTTP 402 challenges, verifies UPI SBMD credentials, captures
@@ -10,8 +10,8 @@ payments, and returns receipts — works standalone or as **Flask** /
 ## Installation
 
 ```bash
-pip install plural-mpp-seller-sdk[flask]     # with Flask support
-pip install plural-mpp-seller-sdk[fastapi]   # with FastAPI support
+pip install pinelabs-online-mpp-seller-sdk[flask]     # with Flask support
+pip install pinelabs-online-mpp-seller-sdk[fastapi]   # with FastAPI support
 # or from source
 cd mpp-seller-sdk-python
 pip install -e '.[flask,fastapi]'
@@ -25,11 +25,11 @@ Requires Python ≥ 3.9. Core deps: `httpx`, `PyJWT[crypto]`.
 
 ```python
 from flask import Flask, jsonify
-from plural_mpp_seller import Amount, ChargeOptions, MppEnvironment, PluralSellerConfig
-from plural_mpp_seller.flask_mw import payment_required
+from pinelabs-online_mpp_seller import Amount, ChargeOptions, MppEnvironment, pinelabs-onlineSellerConfig
+from pinelabs-online_mpp_seller.flask_mw import payment_required
 
 app = Flask(__name__)
-config = PluralSellerConfig(
+config = pinelabs-onlineSellerConfig(
     clientId="…", clientSecret="…", challengeSecretKey="…",
     baseUrl=MppEnvironment.SANDBOX,
 )
@@ -47,11 +47,11 @@ def premium():
 
 ```python
 from fastapi import FastAPI, Depends
-from plural_mpp_seller import Amount, ChargeOptions, MppEnvironment, PluralSellerConfig
-from plural_mpp_seller.fastapi_mw import PaymentRequired
+from pinelabs-online_mpp_seller import Amount, ChargeOptions, MppEnvironment, pinelabs-onlineSellerConfig
+from pinelabs-online_mpp_seller.fastapi_mw import PaymentRequired
 
 app = FastAPI()
-config = PluralSellerConfig(
+config = pinelabs-onlineSellerConfig(
     clientId="…", clientSecret="…", challengeSecretKey="…",
     baseUrl=MppEnvironment.SANDBOX,
 )
@@ -69,8 +69,8 @@ async def premium():
 ### Generic (any framework)
 
 ```python
-from plural_mpp_seller import Amount, ChargeOptions, MppEnvironment, PluralSellerConfig
-from plural_mpp_seller.server.middleware import decide_payment
+from pinelabs-online_mpp_seller import Amount, ChargeOptions, MppEnvironment, pinelabs-onlineSellerConfig
+from pinelabs-online_mpp_seller.server.middleware import decide_payment
 
 decision = decide_payment(
     authorization_header=request.headers.get("Authorization"),
@@ -93,9 +93,9 @@ else:
 ## Configuration
 
 ```python
-PluralSellerConfig(
+pinelabs-onlineSellerConfig(
     clientId="…", clientSecret="…", challengeSecretKey="…",
-    realm="Plural MPP",
+    realm="pinelabs-online MPP",
     baseUrl=MppEnvironment.SANDBOX,
     defaultChallengeExpirySeconds=300,
     requestTimeoutMs=30_000,
@@ -111,13 +111,13 @@ PluralSellerConfig(
 
 ## API
 
-### `PluralMPP.create(config)` → `PluralMPPInstance`
+### `pinelabs-onlineMPP.create(config)` → `pinelabs-onlineMPPInstance`
 
 | Method | Description |
 |---|---|
 | `generate_challenge(options)` | Create a signed 402 challenge |
 | `verify_credential(auth_header)` | Verify a `Payment` credential |
-| `capture(options)` | Capture a payment via Plural's API |
+| `capture(options)` | Capture a payment via pinelabs-online's API |
 | `build_receipt_header(result, challenge_id)` | Build `Payment-Receipt` header value |
 | `build_receipt_data(result, challenge_id)` | Build receipt data object |
 | `verify_grant_token(token)` | Verify a Grantex grant token (`None` when not configured) |
@@ -129,7 +129,7 @@ Also exposed: `ChallengeGenerator`, `CredentialVerifier`, `CaptureClient`,
 ## Error handling
 
 ```python
-from plural_mpp_seller import MppError, MppCaptureError, MppVerificationError
+from pinelabs-online_mpp_seller import MppError, MppCaptureError, MppVerificationError
 
 try:
     result = mpp.capture(options)
