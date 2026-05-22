@@ -1,6 +1,6 @@
-# pinelabs-online-mpp-seller-sdk (Python)
+# pinelabs-online-mpp-server-sdk (Python)
 
-Python port of [`@pinelabs-online/mpp-seller-sdk`](../mpp-seller-sdk). x402
+Python port of [`@pinelabs-online/mpp-server-sdk`](../mpp-server-sdk). x402
 Machine Payments Protocol server-side SDK for monetising API endpoints.
 
 Issues HTTP 402 challenges, verifies UPI SBMD credentials, captures
@@ -10,10 +10,10 @@ payments, and returns receipts — works standalone or as **Flask** /
 ## Installation
 
 ```bash
-pip install pinelabs-online-mpp-seller-sdk[flask]     # with Flask support
-pip install pinelabs-online-mpp-seller-sdk[fastapi]   # with FastAPI support
+pip install pinelabs-online-mpp-server-sdk[flask]     # with Flask support
+pip install pinelabs-online-mpp-server-sdk[fastapi]   # with FastAPI support
 # or from source
-cd mpp-seller-sdk-python
+cd mpp-server-sdk-python
 pip install -e '.[flask,fastapi]'
 ```
 
@@ -25,11 +25,11 @@ Requires Python ≥ 3.9. Core deps: `httpx`, `PyJWT[crypto]`.
 
 ```python
 from flask import Flask, jsonify
-from pinelabs-online_mpp_seller import Amount, ChargeOptions, MppEnvironment, pinelabs-onlineSellerConfig
-from pinelabs-online_mpp_seller.flask_mw import payment_required
+from pinelabs-online_mpp_server import Amount, ChargeOptions, MppEnvironment, pinelabs-onlineserverConfig
+from pinelabs-online_mpp_server.flask_mw import payment_required
 
 app = Flask(__name__)
-config = pinelabs-onlineSellerConfig(
+config = pinelabs-onlineserverConfig(
     clientId="…", clientSecret="…", challengeSecretKey="…",
     baseUrl=MppEnvironment.SANDBOX,
 )
@@ -47,11 +47,11 @@ def premium():
 
 ```python
 from fastapi import FastAPI, Depends
-from pinelabs-online_mpp_seller import Amount, ChargeOptions, MppEnvironment, pinelabs-onlineSellerConfig
-from pinelabs-online_mpp_seller.fastapi_mw import PaymentRequired
+from pinelabs-online_mpp_server import Amount, ChargeOptions, MppEnvironment, pinelabs-onlineserverConfig
+from pinelabs-online_mpp_server.fastapi_mw import PaymentRequired
 
 app = FastAPI()
-config = pinelabs-onlineSellerConfig(
+config = pinelabs-onlineserverConfig(
     clientId="…", clientSecret="…", challengeSecretKey="…",
     baseUrl=MppEnvironment.SANDBOX,
 )
@@ -69,8 +69,8 @@ async def premium():
 ### Generic (any framework)
 
 ```python
-from pinelabs-online_mpp_seller import Amount, ChargeOptions, MppEnvironment, pinelabs-onlineSellerConfig
-from pinelabs-online_mpp_seller.server.middleware import decide_payment
+from pinelabs-online_mpp_server import Amount, ChargeOptions, MppEnvironment, pinelabs-onlineserverConfig
+from pinelabs-online_mpp_server.server.middleware import decide_payment
 
 decision = decide_payment(
     authorization_header=request.headers.get("Authorization"),
@@ -93,7 +93,7 @@ else:
 ## Configuration
 
 ```python
-pinelabs-onlineSellerConfig(
+pinelabs-onlineserverConfig(
     clientId="…", clientSecret="…", challengeSecretKey="…",
     realm="pinelabs-online MPP",
     baseUrl=MppEnvironment.SANDBOX,
@@ -101,7 +101,7 @@ pinelabs-onlineSellerConfig(
     requestTimeoutMs=30_000,
     maxRetries=3,
     initialRetryDelayMs=500,
-    grantex=SellerGrantexConfig(
+    grantex=serverGrantexConfig(
         jwksUrl="https://grantex.dev/.well-known/jwks.json",
         requiredScopes=["mpp:payment:initiate"],
         enforceGrant=True,
@@ -129,7 +129,7 @@ Also exposed: `ChallengeGenerator`, `CredentialVerifier`, `CaptureClient`,
 ## Error handling
 
 ```python
-from pinelabs-online_mpp_seller import MppError, MppCaptureError, MppVerificationError
+from pinelabs-online_mpp_server import MppError, MppCaptureError, MppVerificationError
 
 try:
     result = mpp.capture(options)
