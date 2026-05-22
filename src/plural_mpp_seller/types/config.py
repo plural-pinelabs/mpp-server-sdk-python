@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional, Protocol
 
-from .grantex import SellerGrantexConfig
-
 
 @dataclass
 class Amount:
@@ -36,7 +34,6 @@ class PluralSellerConfig:
     maxRetries: Optional[int] = None
     initialRetryDelayMs: Optional[int] = None
     logger: Optional[MppLogger] = None
-    grantex: Optional[SellerGrantexConfig] = None
     accessToken: Optional[str] = None
 
 

@@ -45,7 +45,7 @@ class PaymentRequired:
     """FastAPI dependency enforcing MPP payment on a route.
 
     Attaches the `Payment-Receipt` header to the response on success.
-    Raises ``HTTPException(402/403)`` with the RFC7807 problem details when
+    Raises ``HTTPException(402)`` with the RFC7807 problem details when
     payment is required, invalid, or failed.
     """
 
@@ -60,11 +60,9 @@ class PaymentRequired:
     async def __call__(self, request: Request, response: Response) -> None:
         charge_options = self._charge(request) if callable(self._charge) else self._charge
         authorization = request.headers.get("authorization")
-        grantex_token = request.headers.get("x-grantex-token")
 
         decision = decide_payment(
             authorization_header=authorization,
-            grantex_token_header=grantex_token,
             config=self._config,
             charge_options=charge_options,
         )

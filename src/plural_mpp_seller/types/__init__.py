@@ -4,7 +4,6 @@ from .challenge import Challenge, ChallengeRequest, ChallengeResult, ProblemDeta
 from .config import Amount, ChargeOptions, MppLogger, PluralSellerConfig
 from .credential import Credential, CredentialChallenge, CredentialPayload, VerificationResult
 from .errors import MppErrorCode, MppErrorDetails, MppErrorResponse
-from .grantex import GrantTokenClaims, GrantVerificationResult, SellerGrantexConfig
 
 __all__ = [
     "Amount",
@@ -19,8 +18,6 @@ __all__ = [
     "Credential",
     "CredentialChallenge",
     "CredentialPayload",
-    "GrantTokenClaims",
-    "GrantVerificationResult",
     "MppErrorCode",
     "MppErrorDetails",
     "MppErrorResponse",
@@ -28,6 +25,5 @@ __all__ = [
     "PluralSellerConfig",
     "ProblemDetails",
     "ReceiptData",
-    "SellerGrantexConfig",
     "VerificationResult",
 ]

@@ -77,7 +77,6 @@ def test_decide_payment_propagates_upstream_capture_failures(monkeypatch) -> Non
 
     decision = decide_payment(
         authorization_header="Payment dummy-credential",
-        grantex_token_header=None,
         config=_config(),
         charge_options=ChargeOptions(
             amount=Amount(value=100, currency="INR"),

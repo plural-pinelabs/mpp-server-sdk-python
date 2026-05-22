@@ -35,8 +35,8 @@ except ImportError as exc:  # pragma: no cover
         "`pip install plural-mpp-seller-sdk[flask]`."
     ) from exc
 
-from ...types.config import ChargeOptions, PluralSellerConfig
-from .generic import decide_payment
+from .types.config import ChargeOptions, PluralSellerConfig
+from .server.middleware.generic import decide_payment
 
 
 ChargeResolver = Callable[..., ChargeOptions]
@@ -53,11 +53,9 @@ def payment_required(
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             charge_options = charge(request) if callable(charge) else charge
             authorization = request.headers.get("Authorization")
-            grantex_token = request.headers.get("X-Grantex-Token")
 
             decision = decide_payment(
                 authorization_header=authorization,
-                grantex_token_header=grantex_token,
                 config=config,
                 charge_options=charge_options,
             )

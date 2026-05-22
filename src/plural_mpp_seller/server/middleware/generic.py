@@ -1,9 +1,9 @@
 """Framework-agnostic payment decision helper.
 
-Given an incoming request's `Authorization` (and optional `X-Grantex-Token`)
-header, this function returns a :class:`PaymentDecision` describing what to
-do next — serve a challenge, reject the credential, or proceed with the
-handler (after capturing the payment).
+Given an incoming request's `Authorization` header, this function returns a
+:class:`PaymentDecision` describing what to do next — serve a challenge,
+reject the credential, or proceed with the handler (after capturing the
+payment).
 
 This is used by the Flask and FastAPI adapters, but can also be used
 directly in any other framework (aiohttp, Django, Bottle, ...).
@@ -21,7 +21,6 @@ from ...utils.errors import MppCaptureError
 from ..capture_client import CaptureClient
 from ..challenge_generator import ChallengeGenerator
 from ..credential_verifier import CredentialVerifier
-from ..grant_token_verifier import GRANTEX_TOKEN_HEADER, GrantTokenVerifier
 from ..receipt_builder import build_receipt_header
 
 
@@ -33,8 +32,6 @@ class PaymentDecision:
       - action="challenge"  : return 402 with problem_details + headers
       - action="invalid"    : return 402 (invalid credential) with problem_details + headers
       - action="failed"     : return 402 (capture failed) with problem_details + headers
-      - action="grant_required" : return 403 with problem_details
-      - action="grant_invalid"  : return 403 with problem_details
       - action="proceed"    : call the downstream handler; set response_headers
     """
     action: str
@@ -50,14 +47,13 @@ class PaymentDecision:
 def decide_payment(
     *,
     authorization_header: Optional[str],
-    grantex_token_header: Optional[str],
     config: PluralSellerConfig,
     charge_options: ChargeOptions,
 ) -> PaymentDecision:
     """Return the next seller action for an incoming paid-resource request.
 
     This helper is framework-agnostic. It either creates a fresh 402 challenge,
-    rejects invalid payment/grant credentials, captures the payment, or returns
+    rejects invalid payment credentials, captures the payment, or returns
     headers that allow the application handler to proceed.
     """
     challenge_generator = ChallengeGenerator(config)
@@ -104,57 +100,20 @@ def decide_payment(
             challenge_result=result,
         )
 
-    # Optional Grantex token verification
-    if config.grantex is not None:
-        enforce = bool(config.grantex.enforceGrant)
-        if not grantex_token_header and enforce:
-            return PaymentDecision(
-                action="grant_required",
-                status=403,
-                headers={"Content-Type": "application/problem+json"},
-                problem_details={
-                    "type": "urn:ietf:rfc:9725:error:grant-required",
-                    "title": "Grant Token Required",
-                    "status": 403,
-                    "detail": f"A valid Grantex grant token is required in the {GRANTEX_TOKEN_HEADER} header.",
-                },
-            )
-        if grantex_token_header:
-            grant_result = GrantTokenVerifier(config.grantex).verify(grantex_token_header)
-            if not grant_result.valid:
-                if enforce:
-                    return PaymentDecision(
-                        action="grant_invalid",
-                        status=403,
-                        headers={"Content-Type": "application/problem+json"},
-                        problem_details={
-                            "type": "urn:ietf:rfc:9725:error:grant-invalid",
-                            "title": "Invalid Grant Token",
-                            "status": 403,
-                            "detail": grant_result.error or "The grant token could not be verified.",
-                        },
-                    )
-                if config.logger is not None:
-                    try:
-                        config.logger.info(
-                            "Grantex token verification failed (non-enforcing)",
-                            {"error": grant_result.error},
-                        )
-                    except Exception:
-                        pass
-
     credential = verification.credential
     assert credential is not None
     capture_client = CaptureClient(config)
     try:
         from ...types.capture import CaptureOptions
-        capture_result = capture_client.capture(CaptureOptions(
-            token=credential.payload.token,
-            amount=charge_options.amount,
+        capture_result = capture_client.capture(
+            CaptureOptions(
+                token=credential.payload.token,
+                amount=charge_options.amount,
                 description=charge_options.description,
                 merchantOrderReference=charge_options.merchantOrderReference,
                 metadata=charge_options.metadata,
-        ))
+            )
+        )
     except MppCaptureError as exc:
         capture_error = exc.capture_error
         if capture_error is not None and capture_error.http_status >= 500:
