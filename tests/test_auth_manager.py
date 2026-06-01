@@ -3,8 +3,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from plural_mpp_seller.server.auth_manager import AuthManager
-from plural_mpp_seller.utils.errors import MppError
+from pinelabs_p3p_server.server.auth_manager import AuthManager
+from pinelabs_p3p_server.utils.errors import P3PError
 
 
 class _MockTransport(httpx.BaseTransport):
@@ -20,7 +20,7 @@ class _MockTransport(httpx.BaseTransport):
                 200,
                 json={
                     "data": {
-                        "access_token": "seller-token",
+                        "access_token": "server-token",
                         "expires_in": 3600,
                         "scope": "mpp:capture",
                     }
@@ -32,9 +32,9 @@ class _MockTransport(httpx.BaseTransport):
 def test_auth_manager_does_not_fall_back_to_mpp_auth_path() -> None:
     transport = _MockTransport()
     client = httpx.Client(transport=transport)
-    manager = AuthManager("seller-client", "seller-secret", "http://localhost:8081", http_client=client)
+    manager = AuthManager("server-client", "server-secret", "http://localhost:8081", http_client=client)
 
-    with pytest.raises(MppError) as exc:
+    with pytest.raises(P3PError) as exc:
         manager.get_access_token()
 
     assert exc.value.http_status == 404

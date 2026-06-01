@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-import hashlib
 import json
 
 import httpx
 import pytest
 
-from plural_mpp_seller.server.capture_client import CaptureClient
-from plural_mpp_seller.types.capture import CaptureOptions
-from plural_mpp_seller.types.config import Amount, PluralSellerConfig
-from plural_mpp_seller.utils.errors import MppCaptureError
+from pinelabs_p3p_server.server.capture_client import CaptureClient
+from pinelabs_p3p_server.types.capture import CaptureOptions
+from pinelabs_p3p_server.types.challenge import PaymentGateway, PaymentMethod
+from pinelabs_p3p_server.types.config import Amount, PineLabsOnlineServerConfig
+from pinelabs_p3p_server.utils.errors import P3PCaptureError
 
 
 class _RecordingTransport(httpx.BaseTransport):
@@ -19,17 +19,16 @@ class _RecordingTransport(httpx.BaseTransport):
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if request.url.path.endswith("/api/auth/v1/token"):
-            return httpx.Response(200, json={"data": {"access_token": "seller-access-token", "expires_in": 300}})
+            return httpx.Response(200, json={"data": {"access_token": "server-access-token", "expires_in": 300}})
         return httpx.Response(
             200,
             json={
                 "data": {
                     "type": "SBMD",
-                    "authorization_id": "v1-sub-260422154824-aa-M3qU2m",
+                    "payment_method_reference_id": "v1-sub-260422154824-aa-M3qU2m",
                     "payment_id": "088d3a01-5b05-43c7-9e1b-ddb11d2db0e4",
                     "merchant_order_reference": "order-123",
-                    "amount": "100",
-                    "currency": "INR",
+                    "amount": {"value": 100, "currency": "INR"},
                     "status": "CONFIRMED",
                     "oms_order_id": "v1-260430172729-aa-V9OITr",
                     "oms_payment_id": "v1-260430172729-aa-V9OITr-up-a",
@@ -52,11 +51,12 @@ def test_capture_client_uses_local_sbmd_route_for_localhost_base() -> None:
     transport = _RecordingTransport()
     client = httpx.Client(transport=transport)
     capture = CaptureClient(
-        PluralSellerConfig(
-            clientId="seller-client",
-            clientSecret="seller-secret",
-            challengeSecretKey="challenge-key",
-            baseUrl="http://localhost:8081",
+        PineLabsOnlineServerConfig(
+            clientId="server-client",
+            clientSecret="server-secret",
+            paymentGateway=PaymentGateway.PineLabsOnline,
+            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+                env="http://localhost:8081",
         ),
         http_client=client,
     )
@@ -65,8 +65,11 @@ def test_capture_client_uses_local_sbmd_route_for_localhost_base() -> None:
         CaptureOptions(
             token="ppt_local_123",
             amount=Amount(value=100, currency="INR"),
+            paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
             merchantOrderReference="order-123",
             customerReference="cust-ref-123",
+            mobileNumber="9876543210",
+            challengeId="ch_test",
             metadata={"mandate_id": "mnd_local_123"},
         )
     )
@@ -74,21 +77,17 @@ def test_capture_client_uses_local_sbmd_route_for_localhost_base() -> None:
     debit_request = next(req for req in transport.requests if req.url.path == "/mpp/v1/debit")
     body = json.loads(debit_request.content.decode() or "{}")
     assert body == {
-        "type": "SBMD",
-        "customer_reference": "cust-ref-123",
-        "merchant_order_reference": "order-123",
-        "amount": "100",
-        "currency": "INR",
+        "payment_method": "SBMD",
+        "customer": {"mobile_number": "9876543210"},
+        "payment_amount": {"value": 100, "currency": "INR"},
         "payment_token": "ppt_local_123",
+        "challenge_id": "ch_test",
     }
-    expected_hash = hashlib.sha256(
-        json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    assert debit_request.headers["Request-Hash"] == expected_hash
+    assert "Request-Hash" not in debit_request.headers
     assert "Merchant-ID" not in debit_request.headers
     assert result.capture_id == "v1-260430172729-aa-V9OITr-up-a"
     assert result.mandate_id == "v1-sub-260422154824-aa-M3qU2m"
-    assert result.payment_id == "088d3a01-5b05-43c7-9e1b-ddb11d2db0e4"
+    assert result.payment_id == "v1-260430172729-aa-V9OITr-up-a"
     assert result.order_id == "v1-260430172729-aa-V9OITr"
     assert result.order_status == "CONFIRMED"
     assert result.payment_status == "PROCESSED"
@@ -96,16 +95,16 @@ def test_capture_client_uses_local_sbmd_route_for_localhost_base() -> None:
     assert result.receipt["oms_payment_id"] == "v1-260430172729-aa-V9OITr-up-a"
 
 
-def test_capture_client_uses_configured_bearer_token_without_auth_exchange() -> None:
+def test_capture_client_exchanges_server_token_for_debit() -> None:
     transport = _RecordingTransport()
     client = httpx.Client(transport=transport)
     capture = CaptureClient(
-        PluralSellerConfig(
-            clientId="seller-client",
-            clientSecret="seller-secret",
-            challengeSecretKey="challenge-key",
-            baseUrl="http://localhost:8081",
-            accessToken="Bearer configured-seller-token",
+        PineLabsOnlineServerConfig(
+            clientId="server-client",
+            clientSecret="server-secret",
+            paymentGateway=PaymentGateway.PineLabsOnline,
+            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+                env="http://localhost:8081",
         ),
         http_client=client,
     )
@@ -114,14 +113,17 @@ def test_capture_client_uses_configured_bearer_token_without_auth_exchange() -> 
         CaptureOptions(
             token="ppt_local_123",
             amount=Amount(value=100, currency="INR"),
+            paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
             merchantOrderReference="order-123",
             customerReference="cust-ref-123",
+            mobileNumber="9876543210",
+            challengeId="ch_test",
         )
     )
 
-    assert "/api/auth/v1/token" not in [request.url.path for request in transport.requests]
+    assert "/api/auth/v1/token" in [request.url.path for request in transport.requests]
     debit_request = next(req for req in transport.requests if req.url.path == "/mpp/v1/debit")
-    assert debit_request.headers["Authorization"] == "Bearer configured-seller-token"
+    assert debit_request.headers["Authorization"] == "Bearer server-access-token"
     assert "Merchant-ID" not in debit_request.headers
 
 
@@ -129,21 +131,55 @@ def test_capture_client_requires_customer_reference_for_v2_debit() -> None:
     transport = _RecordingTransport()
     client = httpx.Client(transport=transport)
     capture = CaptureClient(
-        PluralSellerConfig(
-            clientId="seller-client",
-            clientSecret="seller-secret",
-            challengeSecretKey="challenge-key",
-            baseUrl="http://localhost:8081",
+        PineLabsOnlineServerConfig(
+            clientId="server-client",
+            clientSecret="server-secret",
+            paymentGateway=PaymentGateway.PineLabsOnline,
+            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+                env="http://localhost:8081",
         ),
         http_client=client,
     )
 
-    with pytest.raises(MppCaptureError, match="customerReference"):
+    with pytest.raises(P3PCaptureError, match="customerReference"):
         capture.capture(
             CaptureOptions(
                 token="ppt_local_123",
                 amount=Amount(value=100, currency="INR"),
+                paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
                 merchantOrderReference="order-123",
+                challengeId="ch_test",
+                mobileNumber="9876543210",
+                metadata={"mandate_id": "mnd_local_123"},
+            )
+        )
+
+    assert transport.requests == []
+
+
+def test_capture_client_requires_challenge_id_for_v2_debit() -> None:
+    transport = _RecordingTransport()
+    client = httpx.Client(transport=transport)
+    capture = CaptureClient(
+        PineLabsOnlineServerConfig(
+            clientId="server-client",
+            clientSecret="server-secret",
+            paymentGateway=PaymentGateway.PineLabsOnline,
+            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+                env="http://localhost:8081",
+        ),
+        http_client=client,
+    )
+
+    with pytest.raises(P3PCaptureError, match="challengeId"):
+        capture.capture(
+            CaptureOptions(
+                token="ppt_local_123",
+                amount=Amount(value=100, currency="INR"),
+                paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+                merchantOrderReference="order-123",
+                customerReference="cust-ref-123",
+                mobileNumber="9876543210",
                 metadata={"mandate_id": "mnd_local_123"},
             )
         )
@@ -155,11 +191,12 @@ def test_capture_client_uses_local_sbmd_route_for_host_docker_internal_base() ->
     transport = _RecordingTransport()
     client = httpx.Client(transport=transport)
     capture = CaptureClient(
-        PluralSellerConfig(
-            clientId="seller-client",
-            clientSecret="seller-secret",
-            challengeSecretKey="challenge-key",
-            baseUrl="http://host.docker.internal:8081",
+        PineLabsOnlineServerConfig(
+            clientId="server-client",
+            clientSecret="server-secret",
+            paymentGateway=PaymentGateway.PineLabsOnline,
+            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+                env="http://host.docker.internal:8081",
         ),
         http_client=client,
     )
@@ -168,8 +205,11 @@ def test_capture_client_uses_local_sbmd_route_for_host_docker_internal_base() ->
         CaptureOptions(
             token="ppt_local_123",
             amount=Amount(value=100, currency="INR"),
+            paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
             merchantOrderReference="order-123",
             customerReference="cust-ref-123",
+            mobileNumber="9876543210",
+            challengeId="ch_test",
             metadata={"mandate_id": "mnd_local_123"},
         )
     )
@@ -193,17 +233,16 @@ class _ActualOnlyTransport(httpx.BaseTransport):
             200,
             json={
                 "data": {
-                    "authorization_id": "mnd_real_123",
+                    "payment_method_reference_id": "mnd_real_123",
                     "payment_token": "ppt_real_123",
-                    "customer_id": "cust_real_123",
+                    "customer": {"merchant_customer_reference": "cust-real-ref", "customer_id": "cust_real_123"},
                     "merchant_id": "118284",
                     "oms_order_id": "ord_real_123",
                     "oms_payment_id": "ord_real_123-up-a",
                     "metadata": {"external_capture_id": "cap_real_123", "upstream_payment_status": "PROCESSED"},
                     "payment_id": "pay_real_123",
                     "status": "CONFIRMED",
-                    "amount": "100",
-                    "currency": "INR",
+                    "amount": {"value": 100, "currency": "INR"},
                     "created_at": "2026-04-22T19:00:00Z",
                 }
             },
@@ -214,11 +253,12 @@ def test_capture_client_does_not_use_internal_mpp_mock_route() -> None:
     transport = _ActualOnlyTransport()
     client = httpx.Client(transport=transport)
     capture = CaptureClient(
-        PluralSellerConfig(
-            clientId="seller-client",
-            clientSecret="seller-secret",
-            challengeSecretKey="challenge-key",
-            baseUrl="http://api:8000/api/v1/internal-mpp",
+        PineLabsOnlineServerConfig(
+            clientId="server-client",
+            clientSecret="server-secret",
+            paymentGateway=PaymentGateway.PineLabsOnline,
+            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+                env="http://api:8000/api/v1/internal-mpp",
         ),
         http_client=client,
     )
@@ -227,8 +267,11 @@ def test_capture_client_does_not_use_internal_mpp_mock_route() -> None:
         CaptureOptions(
             token="ppt_real_123",
             amount=Amount(value=100, currency="INR"),
+            paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
             merchantOrderReference="order-123",
             customerReference="cust-ref-123",
+            mobileNumber="9876543210",
+            challengeId="ch_test",
             metadata={"mandate_id": "mnd_real_123"},
         )
     )
@@ -243,7 +286,7 @@ def test_capture_client_does_not_use_internal_mpp_mock_route() -> None:
 class _TopLevelErrorTransport(httpx.BaseTransport):
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/api/auth/v1/token"):
-            return httpx.Response(200, json={"data": {"access_token": "seller-access-token", "expires_in": 300}})
+            return httpx.Response(200, json={"data": {"access_token": "server-access-token", "expires_in": 300}})
         return httpx.Response(
             500,
             json={
@@ -259,22 +302,26 @@ class _TopLevelErrorTransport(httpx.BaseTransport):
 
 def test_capture_client_preserves_top_level_error_details() -> None:
     capture = CaptureClient(
-        PluralSellerConfig(
-            clientId="seller-client",
-            clientSecret="seller-secret",
-            challengeSecretKey="challenge-key",
-            baseUrl="http://localhost:8081",
+        PineLabsOnlineServerConfig(
+            clientId="server-client",
+            clientSecret="server-secret",
+            paymentGateway=PaymentGateway.PineLabsOnline,
+            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+                env="http://localhost:8081",
         ),
         http_client=httpx.Client(transport=_TopLevelErrorTransport()),
     )
 
-    with pytest.raises(MppCaptureError) as exc:
+    with pytest.raises(P3PCaptureError) as exc:
         capture.capture(
             CaptureOptions(
                 token="ppt_local_123",
                 amount=Amount(value=25000, currency="INR"),
+                paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
                 merchantOrderReference="quote_123",
                 customerReference="cust-ref-123",
+                mobileNumber="9876543210",
+                challengeId="ch_test",
                 metadata={"mandate_id": "mnd_local_123"},
             )
         )

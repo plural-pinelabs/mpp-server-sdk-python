@@ -3,14 +3,14 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "plural-mpp-seller-sdk"
+name = "pinelabs-p3p-server-sdk"
 version = "0.1.0"
-description = "Plural MPP Seller SDK — x402 Machine Payments Protocol server middleware (Python)"
+description = "Pine Labs Online P3P Server SDK — x402 Pine Labs Online P3P server middleware (Python)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Plural" }]
-keywords = ["mpp", "x402", "payment", "seller", "plural", "upi", "sbmd", "machine-payments"]
+authors = [{ name = "Pine Labs Online" }]
+keywords = ["mpp", "x402", "payment", "server", "upi", "sbmd", "machine-payments"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Framework :: FastAPI",
@@ -41,4 +41,4 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-plural_mpp_seller = ["py.typed"]
+pinelabs_p3p_server = ["py.typed"]

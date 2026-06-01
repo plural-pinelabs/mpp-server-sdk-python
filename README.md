@@ -1,38 +1,70 @@
-# pinelabs-online-mpp-server-sdk (Python)
+# Pine Labs Online P3P Server SDK (Python)
 
-Python port of [`@pinelabs-online/mpp-server-sdk`](../mpp-server-sdk). x402
-Machine Payments Protocol server-side SDK for monetising API endpoints.
-
-Issues HTTP 402 challenges, verifies UPI SBMD credentials, captures
-payments, and returns receipts — works standalone or as **Flask** /
-**FastAPI** middleware.
+Python SDK for Pine Labs Online P3P server integrations. It mirrors
+`@pine-labs-online/p3p-server-sdk`, creates mandates, generates HTTP 402
+payment challenges, verifies client credentials, captures payments through P3P,
+and builds `Payment-Receipt` headers.
 
 ## Installation
 
 ```bash
-pip install pinelabs-online-mpp-server-sdk[flask]     # with Flask support
-pip install pinelabs-online-mpp-server-sdk[fastapi]   # with FastAPI support
-# or from source
-cd mpp-server-sdk-python
-pip install -e '.[flask,fastapi]'
+pip install pinelabs-p3p-server-sdk[flask]
+pip install pinelabs-p3p-server-sdk[fastapi]
 ```
 
-Requires Python ≥ 3.9. Core deps: `httpx`, `PyJWT[crypto]`.
+Import module: `pinelabs_p3p_server`. Requires Python 3.9 or newer.
 
-## Quick Start
+## Config
 
-### Flask
+```python
+from pinelabs_p3p_server import (
+    P3PEnvironment,
+    PaymentGateway,
+    PaymentMethod,
+    PineLabsOnlineServerConfig,
+)
+
+config = PineLabsOnlineServerConfig(
+    clientId="...",
+    clientSecret="...",
+    env=P3PEnvironment.SANDBOX,
+    paymentGateway=PaymentGateway.PineLabsOnline,
+    availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+)
+```
+
+`clientId` and `clientSecret` are used internally for `POST /api/auth/v1/token`.
+The local challenge HMAC key is derived internally from `clientSecret` with a
+stable SDK prefix, so there is no separate challenge-signing config field.
+The SDK caches and refreshes bearer tokens before expiry. `env` selects the
+Pine Labs host used for auth and `/mpp/v1/*` service calls.
+
+## Mandates
+
+```python
+from pinelabs_p3p_server import Amount, CreateMandateOptions, PineLabsOnlineP3P
+
+p3p = PineLabsOnlineP3P.create(config)
+mandate = p3p.create_mandate(CreateMandateOptions(
+    mobileNumber="9876543210",
+    customerReference="9876543210",
+    amount=Amount(value=100000, currency="INR"),
+    paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+    validityInDays=20,
+))
+```
+
+This maps to `POST /mpp/v1/pre-authorize` and sends
+`customer.mobile_number`.
+
+## Paid Resource Flow
 
 ```python
 from flask import Flask, jsonify
-from pinelabs-online_mpp_server import Amount, ChargeOptions, MppEnvironment, pinelabs-onlineserverConfig
-from pinelabs-online_mpp_server.flask_mw import payment_required
+from pinelabs_p3p_server import Amount, ChargeOptions
+from pinelabs_p3p_server.flask_mw import payment_required
 
 app = Flask(__name__)
-config = pinelabs-onlineserverConfig(
-    clientId="…", clientSecret="…", challengeSecretKey="…",
-    baseUrl=MppEnvironment.SANDBOX,
-)
 
 @app.get("/api/premium")
 @payment_required(config, ChargeOptions(
@@ -43,100 +75,42 @@ def premium():
     return jsonify({"data": "premium content"})
 ```
 
-### FastAPI
+The middleware reads `P3P-Credential: Payment <payload>`, not `Authorization`,
+so it does not conflict with application bearer auth.
+
+## Capture
 
 ```python
-from fastapi import FastAPI, Depends
-from pinelabs-online_mpp_server import Amount, ChargeOptions, MppEnvironment, pinelabs-onlineserverConfig
-from pinelabs-online_mpp_server.fastapi_mw import PaymentRequired
+from pinelabs_p3p_server import CaptureOptions
 
-app = FastAPI()
-config = pinelabs-onlineserverConfig(
-    clientId="…", clientSecret="…", challengeSecretKey="…",
-    baseUrl=MppEnvironment.SANDBOX,
-)
-
-require_payment = PaymentRequired(config, ChargeOptions(
+result = p3p.capture(CaptureOptions(
+    token="MPP_TOK_123",
     amount=Amount(value=50000, currency="INR"),
-    resource="/api/premium",
+    paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+    customerReference="9876543210",
+    mobileNumber="9876543210",
+    challengeId="ch_123",
+    merchantOrderReference="order-123",
 ))
-
-@app.get("/api/premium", dependencies=[Depends(require_payment)])
-async def premium():
-    return {"data": "premium content"}
 ```
 
-### Generic (any framework)
+The debit body uses `customer.mobile_number`, `payment_amount`,
+`payment_token`, and `challenge_id`. The SDK sends `Idempotency-Key` and does
+not send `Merchant-ID`.
+
+## Generic Middleware Helper
 
 ```python
-from pinelabs-online_mpp_server import Amount, ChargeOptions, MppEnvironment, pinelabs-onlineserverConfig
-from pinelabs-online_mpp_server.server.middleware import decide_payment
+from pinelabs_p3p_server.server.middleware import decide_payment
 
 decision = decide_payment(
-    authorization_header=request.headers.get("Authorization"),
-    grantex_token_header=request.headers.get("X-Grantex-Token"),
+    credential_header=request.headers.get("P3P-Credential"),
     config=config,
     charge_options=ChargeOptions(
         amount=Amount(value=50000, currency="INR"),
         resource="/api/premium-data",
     ),
 )
-
-if decision.action != "proceed":
-    # Build a 402/403 response from decision.problem_details + decision.headers
-    ...
-else:
-    # Run business logic; attach decision.headers (Payment-Receipt) to your response
-    ...
-```
-
-## Configuration
-
-```python
-pinelabs-onlineserverConfig(
-    clientId="…", clientSecret="…", challengeSecretKey="…",
-    realm="pinelabs-online MPP",
-    baseUrl=MppEnvironment.SANDBOX,
-    defaultChallengeExpirySeconds=300,
-    requestTimeoutMs=30_000,
-    maxRetries=3,
-    initialRetryDelayMs=500,
-    grantex=serverGrantexConfig(
-        jwksUrl="https://grantex.dev/.well-known/jwks.json",
-        requiredScopes=["mpp:payment:initiate"],
-        enforceGrant=True,
-    ),
-)
-```
-
-## API
-
-### `pinelabs-onlineMPP.create(config)` → `pinelabs-onlineMPPInstance`
-
-| Method | Description |
-|---|---|
-| `generate_challenge(options)` | Create a signed 402 challenge |
-| `verify_credential(auth_header)` | Verify a `Payment` credential |
-| `capture(options)` | Capture a payment via pinelabs-online's API |
-| `build_receipt_header(result, challenge_id)` | Build `Payment-Receipt` header value |
-| `build_receipt_data(result, challenge_id)` | Build receipt data object |
-| `verify_grant_token(token)` | Verify a Grantex grant token (`None` when not configured) |
-
-Also exposed: `ChallengeGenerator`, `CredentialVerifier`, `CaptureClient`,
-`GrantTokenVerifier`, `AuthManager`, `build_receipt_header`,
-`build_receipt_data`, `build_failure_receipt_data`.
-
-## Error handling
-
-```python
-from pinelabs-online_mpp_server import MppError, MppCaptureError, MppVerificationError
-
-try:
-    result = mpp.capture(options)
-except MppCaptureError as err:
-    print(err, err.capture_error and err.capture_error.http_status)
-except MppError as err:
-    print(err.code, err.http_status)
 ```
 
 ## License
