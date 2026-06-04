@@ -36,7 +36,7 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "FastAPI is required for pinelabs_p3p_server.fastapi_mw. Install with "
-        "`pip install pinelabs-p3p-server-sdk[fastapi]`."
+        "`pip install pinelabs-online-p3p-server-sdk[fastapi]`."
     ) from exc
 
 from .types.config import ChargeOptions, PineLabsOnlineServerConfig

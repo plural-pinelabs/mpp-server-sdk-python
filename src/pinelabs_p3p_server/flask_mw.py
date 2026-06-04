@@ -36,7 +36,7 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "Flask is required for pinelabs_p3p_server.flask_mw. Install with "
-        "`pip install pinelabs-p3p-server-sdk[flask]`."
+        "`pip install pinelabs-online-p3p-server-sdk[flask]`."
     ) from exc
 
 from .types.config import ChargeOptions, PineLabsOnlineServerConfig

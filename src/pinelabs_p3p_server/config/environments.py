@@ -8,12 +8,12 @@ class P3PEnvironment:
 
 P3PEnvironmentDefaults = {
     P3PEnvironment.SANDBOX: {
-        "requestTimeoutMs": 30_000,
+        "requestTimeoutMs": 60_000,
         "maxRetries": 2,
         "initialRetryDelayMs": 300,
     },
     P3PEnvironment.PRODUCTION: {
-        "requestTimeoutMs": 10_000,
+        "requestTimeoutMs": 45_000,
         "maxRetries": 2,
         "initialRetryDelayMs": 200,
     },

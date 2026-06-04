@@ -1,4 +1,4 @@
-"""Pine Labs Online P3P Server SDK — Python port of `@pine-labs-online/p3p-server-sdk`.
+"""Pine Labs Online P3P Server SDK — Python port of `p3p-server-sdk`.
 
 Issues HTTP 402 challenges, verifies P3P payment credentials, captures
 payments, and returns receipts — works standalone or as Flask / FastAPI
@@ -83,4 +83,4 @@ __all__ = [
     "decide_payment",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.4"

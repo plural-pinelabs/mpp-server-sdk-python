@@ -1,10 +1,10 @@
 Metadata-Version: 2.4
-Name: pinelabs-online-mpp-server-sdk
-Version: 0.1.2
-Summary: Plural P3P Seller SDK — x402 Plural P3P server middleware (Python)
-Author: Plural
+Name: pinelabs-online-p3p-server-sdk
+Version: 0.1.4
+Summary: Pine Labs Online P3P Server SDK — x402 Pine Labs Online P3P server middleware (Python)
+Author: Pine Labs Online
 License: MIT
-Keywords: mpp,x402,payment,seller,plural,upi,sbmd,machine-payments
+Keywords: mpp,x402,payment,server,upi,sbmd,machine-payments
 Classifier: Development Status :: 3 - Alpha
 Classifier: Framework :: FastAPI
 Classifier: Framework :: Flask
@@ -30,58 +30,60 @@ Requires-Dist: pytest>=7; extra == "dev"
 Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
 Requires-Dist: flask>=2.3; extra == "dev"
 Requires-Dist: fastapi>=0.110; extra == "dev"
+Requires-Dist: starlette>=0.36; extra == "dev"
 
-# Pine Labs Online P3P Seller SDK (Python)
+# Pine Labs Online P3P Server SDK (Python)
 
-Python SDK for Pine Labs Online P3P seller integrations. It mirrors
-`@pine-labs-online/p3p-seller-sdk`, creates mandates, generates HTTP 402
-payment challenges, verifies buyer credentials, captures payments through P3P,
+Python SDK for Pine Labs Online P3P server integrations. It mirrors
+`@pine-labs-online/p3p-server-sdk`, creates mandates, generates HTTP 402
+payment challenges, verifies client credentials, captures payments through P3P,
 and builds `Payment-Receipt` headers.
 
 ## Installation
 
 ```bash
-pip install pinelabs-p3p-seller-sdk[flask]
-pip install pinelabs-p3p-seller-sdk[fastapi]
+pip install pinelabs-online-p3p-server-sdk[flask]
+pip install pinelabs-online-p3p-server-sdk[fastapi]
 ```
 
-Import module: `pinelabs_p3p_seller`. Requires Python 3.9 or newer.
+Import module: `pinelabs_p3p_server`. Requires Python 3.9 or newer.
 
 ## Config
 
 ```python
-from pinelabs_p3p_seller import (
+from pinelabs_p3p_server import (
     P3PEnvironment,
     PaymentGateway,
     PaymentMethod,
-    PluralSellerConfig,
+    PineLabsOnlineServerConfig,
 )
 
-config = PluralSellerConfig(
+config = PineLabsOnlineServerConfig(
     clientId="...",
     clientSecret="...",
-    challengeSecretKey="...",
     env=P3PEnvironment.SANDBOX,
     paymentGateway=PaymentGateway.PineLabsOnline,
-    availablePaymentMethods=[PaymentMethod.UpiSbmd, PaymentMethod.Crypto],
+    availablePaymentMethods=[PaymentMethod.RESERVE_PAY, PaymentMethod.Crypto],
 )
 ```
 
 `clientId` and `clientSecret` are used internally for `POST /api/auth/v1/token`.
+The local challenge HMAC key is derived internally from `clientSecret` with a
+stable SDK prefix, so there is no separate challenge-signing config field.
 The SDK caches and refreshes bearer tokens before expiry. `env` selects the
 Pine Labs host used for auth and `/mpp/v1/*` service calls.
 
 ## Mandates
 
 ```python
-from pinelabs_p3p_seller import Amount, CreateMandateOptions, PluralP3P
+from pinelabs_p3p_server import Amount, CreateMandateOptions, PineLabsOnlineP3P
 
-p3p = PluralP3P.create(config)
+p3p = PineLabsOnlineP3P.create(config)
 mandate = p3p.create_mandate(CreateMandateOptions(
     mobileNumber="9876543210",
     customerReference="9876543210",
     amount=Amount(value=100000, currency="INR"),
-    paymentMethod=PaymentMethod.UpiSbmd,
+    paymentMethod=PaymentMethod.RESERVE_PAY,
     validityInDays=20,
 ))
 ```
@@ -93,8 +95,8 @@ This maps to `POST /mpp/v1/pre-authorize` and sends
 
 ```python
 from flask import Flask, jsonify
-from pinelabs_p3p_seller import Amount, ChargeOptions
-from pinelabs_p3p_seller.flask_mw import payment_required
+from pinelabs_p3p_server import Amount, ChargeOptions
+from pinelabs_p3p_server.flask_mw import payment_required
 
 app = Flask(__name__)
 
@@ -113,12 +115,12 @@ so it does not conflict with application bearer auth.
 ## Capture
 
 ```python
-from pinelabs_p3p_seller import CaptureOptions
+from pinelabs_p3p_server import CaptureOptions
 
 result = p3p.capture(CaptureOptions(
     token="MPP_TOK_123",
     amount=Amount(value=50000, currency="INR"),
-    paymentMethod=PaymentMethod.UpiSbmd,
+    paymentMethod=PaymentMethod.RESERVE_PAY,
     customerReference="9876543210",
     mobileNumber="9876543210",
     challengeId="ch_123",
@@ -127,13 +129,13 @@ result = p3p.capture(CaptureOptions(
 ```
 
 The debit body uses `customer.mobile_number`, `payment_amount`,
-`payment_token`, and `challenge_id`. The SDK sends `Idempotency-Key` and
-`Request-Hash` headers and does not send `Merchant-ID`.
+`payment_token`, and `challenge_id`. The SDK sends `Idempotency-Key` and does
+not send `Merchant-ID`.
 
 ## Generic Middleware Helper
 
 ```python
-from pinelabs_p3p_seller.server.middleware import decide_payment
+from pinelabs_p3p_server.server.middleware import decide_payment
 
 decision = decide_payment(
     credential_header=request.headers.get("P3P-Credential"),

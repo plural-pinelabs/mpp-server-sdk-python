@@ -43,6 +43,10 @@ class PineLabsOnlineP3PInstance:
         """Execute a debit against `/mpp/v1/debit` using a one-time payment token."""
         return self._capture_client.capture(options)
 
+    def get_debit_status(self, idempotency_key: str) -> CaptureResult:
+        """Fetch debit status through `GET /mpp/v1/debit/{id}`."""
+        return self._capture_client.get_debit_status(idempotency_key)
+
     def create_mandate(self, options: CreateMandateOptions) -> Mandate:
         """Create a mandate/pre-authorization through `POST /mpp/v1/pre-authorize`."""
         return self._api_client.create_mandate(options)

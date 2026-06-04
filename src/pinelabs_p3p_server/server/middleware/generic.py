@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from ...types.capture import CaptureResult
+from ...types.capture import CaptureResult, is_pending_debit_status
 from ...types.challenge import ChallengeResult
 from ...types.config import ChargeOptions, PineLabsOnlineServerConfig
 from ...types.credential import Credential
@@ -32,12 +32,14 @@ class PaymentDecision:
       - action="challenge"  : return 402 with problem_details + headers
       - action="invalid"    : return 402 (invalid credential) with problem_details + headers
       - action="failed"     : return 402 (capture failed) with problem_details + headers
+      - action="pending"    : return 202 with pending body + headers
       - action="proceed"    : call the downstream handler; set response_headers
     """
     action: str
     status: int = 200
     headers: Dict[str, str] = None  # type: ignore[assignment]
     problem_details: Optional[Dict[str, Any]] = None
+    pending_body: Optional[Dict[str, Any]] = None
     capture_result: Optional[CaptureResult] = None
     credential: Optional[Credential] = None
     receipt_header: Optional[str] = None
@@ -158,6 +160,18 @@ def decide_payment(
             challenge_result=result,
         )
 
+    if _is_pending_capture_result(capture_result):
+        pending_body = _pending_capture_body(capture_result)
+        return PaymentDecision(
+            action="pending",
+            status=202,
+            headers={"Content-Type": "application/json"},
+            problem_details=pending_body,
+            pending_body=pending_body,
+            capture_result=capture_result,
+            credential=credential,
+        )
+
     receipt_header = build_receipt_header(
         capture_result,
         credential.challenge.id,
@@ -172,3 +186,36 @@ def decide_payment(
         credential=credential,
         receipt_header=receipt_header,
     )
+
+
+def _is_pending_capture_result(capture_result: CaptureResult) -> bool:
+    if bool(_capture_value(capture_result, "pending")):
+        return True
+    return is_pending_debit_status(_capture_value(capture_result, "status"))
+
+
+def _pending_capture_body(capture_result: CaptureResult) -> Dict[str, Any]:
+    status = str(_capture_value(capture_result, "status") or "PENDING")
+    body: Dict[str, Any] = {
+        "status": "PENDING",
+        "idempotencyKey": str(
+            _capture_value(capture_result, "idempotencyKey")
+            or _capture_value(capture_result, "idempotency_key")
+            or ""
+        ),
+        "message": str(
+            _capture_value(capture_result, "message")
+            or "Payment accepted and still processing"
+        ),
+        "debitStatus": status,
+    }
+    retry_after = _capture_value(capture_result, "retryAfter")
+    if retry_after is not None:
+        body["retryAfter"] = retry_after
+    return body
+
+
+def _capture_value(capture_result: CaptureResult, key: str) -> Any:
+    if isinstance(capture_result, dict):
+        return capture_result.get(key)
+    return getattr(capture_result, key, None)

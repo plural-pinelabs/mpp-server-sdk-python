@@ -57,7 +57,7 @@ def test_server_derives_challenge_hmac_key_from_client_secret() -> None:
         "payload": {
             "type": "token",
             "token": "MPP_TOK_test",
-            "payment_method": "SBMD",
+            "payment_method": "RESERVE_PAY",
         },
     }
 

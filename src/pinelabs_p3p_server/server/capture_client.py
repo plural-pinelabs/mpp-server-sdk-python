@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -9,7 +11,11 @@ from ..config.environments import resolve_p3p_base_url
 from ..types.capture import CaptureOptions, CaptureResult
 from ..types.config import Amount, P3PLogger, PineLabsOnlineServerConfig
 from ..utils.errors import P3PCaptureError, P3PError
-from ..utils.fetch_helpers import request_with_retry
+from ..utils.fetch_helpers import (
+    DEFAULT_INITIAL_RETRY_DELAY_MS,
+    DEFAULT_MAX_RETRIES,
+    request_with_retry,
+)
 from ..utils.validation import normalize_mobile_number
 from .auth_manager import AuthManager
 
@@ -57,34 +63,66 @@ class CaptureClient:
             "challenge_id": challenge_id,
         }
 
+        pending_attempts = 0
+        while True:
+            response = request_with_retry(
+                self._http,
+                "POST",
+                f"{self._base_url}/mpp/v1/debit",
+                headers=headers,
+                json=payload,
+                timeout_ms=self._timeout_ms,
+                logger=self._logger,
+                max_retries=self._max_retries,
+                initial_retry_delay_ms=self._initial_retry_delay_ms,
+            )
+
+            if response.status_code == 202:
+                retry_after_ms = _resolve_pending_retry_after_ms(
+                    response.headers.get("Retry-After"),
+                    self._initial_retry_delay_ms,
+                )
+                result = _capture_result_from_response(
+                    response,
+                    self._payment_gateway,
+                    idempotency_key,
+                    pending=True,
+                    retry_after_ms=retry_after_ms,
+                )
+                if pending_attempts >= _effective_max_retries(self._max_retries):
+                    return result
+                pending_attempts += 1
+                time.sleep(retry_after_ms / 1000.0)
+                continue
+
+            if response.status_code >= 400:
+                _raise_capture_error(response)
+
+            return _capture_result_from_response(response, self._payment_gateway, idempotency_key)
+
+    def get_debit_status(self, idempotency_key: str) -> CaptureResult:
+        """Fetch the latest debit status via `GET /mpp/v1/debit/{id}`."""
+        if not str(idempotency_key or "").strip():
+            raise ValueError("idempotency_key is required")
+
+        auth_token = self._auth.get_access_token()
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {auth_token}",
+        }
         response = request_with_retry(
             self._http,
-            "POST",
-            f"{self._base_url}/mpp/v1/debit",
+            "GET",
+            f"{self._base_url}/mpp/v1/debit/{quote(str(idempotency_key), safe='')}",
             headers=headers,
-            json=payload,
             timeout_ms=self._timeout_ms,
             logger=self._logger,
             max_retries=self._max_retries,
             initial_retry_delay_ms=self._initial_retry_delay_ms,
         )
-
         if response.status_code >= 400:
-            try:
-                err_body = response.json()
-            except Exception as exc:
-                raise P3PCaptureError(f"Capture failed with status {response.status_code}") from exc
-            raise P3PCaptureError(
-                f"Capture failed: {err_body.get('error', {}).get('message', 'unknown error')}",
-                P3PError.from_response(response.status_code, err_body),
-            )
-
-        payload = response.json()
-        data = (payload.get("data", payload) if isinstance(payload, dict) else {}) or {}
-        capture_result = _dict_to_capture_result(data)
-        capture_result.payment_gateway = self._payment_gateway
-        capture_result.payment_method = options.paymentMethod
-        return capture_result
+            _raise_capture_error(response)
+        return _capture_result_from_response(response, self._payment_gateway, str(idempotency_key))
 
 
 def _resolve_customer_reference(options: CaptureOptions) -> str:
@@ -123,53 +161,51 @@ def _payment_method_value(value: Any) -> str:
     return value.value if hasattr(value, "value") else str(value or "")
 
 
-def _dict_to_capture_result(data: dict[str, Any]) -> CaptureResult:
-    customer = data.get("customer") if isinstance(data.get("customer"), dict) else {}
-    amt = data.get("amount") or data.get("payment_amount") or data.get("paymentAmount") or {}
-    if not isinstance(amt, dict):
-        amt = {"value": amt, "currency": data.get("currency", "INR")}
-    payment_data = data.get("payment_data") if isinstance(data.get("payment_data"), dict) else {}
-    payment_sbmd_data = payment_data.get("sbmd_data") if isinstance(payment_data.get("sbmd_data"), dict) else {}
-    metadata = data.get("metadata") or {}
-    if payment_data:
-        metadata = {**metadata, "payment_data": payment_data}
-    sbmd_data = metadata.get("sbmd_data") or {}
-    capture_id = (
-        data.get("merchant_payment_debit_reference")
-        or metadata.get("external_capture_id")
-        or data.get("capture_id")
-        or data.get("debit_id")
-        or data.get("payment_id", "")
+def _effective_max_retries(value: Optional[int]) -> int:
+    return DEFAULT_MAX_RETRIES if value is None else value
+
+
+def _resolve_pending_retry_after_ms(retry_after: Optional[str], configured_delay_ms: Optional[int]) -> int:
+    if retry_after is not None:
+        try:
+            seconds = float(retry_after)
+        except (TypeError, ValueError):
+            seconds = None
+        if seconds is not None and seconds >= 0:
+            return int(seconds * 1000)
+    return configured_delay_ms or DEFAULT_INITIAL_RETRY_DELAY_MS
+
+
+def _raise_capture_error(response: httpx.Response) -> None:
+    try:
+        err_body = response.json()
+    except Exception as exc:
+        raise P3PCaptureError(f"Capture failed with status {response.status_code}") from exc
+    raise P3PCaptureError(
+        f"Capture failed: {err_body.get('error', {}).get('message', 'unknown error')}",
+        P3PError.from_response(response.status_code, err_body),
     )
-    external_payment_id = (
-        payment_sbmd_data.get("upstream_payment_id")
-        or metadata.get("external_payment_id")
-        or data.get("payment_id")
-        or data.get("oms_payment_id")
-        or ""
+
+
+def _capture_result_from_response(
+    response: httpx.Response,
+    payment_gateway: Any,
+    idempotency_key: str,
+    *,
+    pending: bool = False,
+    retry_after_ms: Optional[int] = None,
+) -> CaptureResult:
+    payload = response.json()
+    data = (payload.get("data", payload) if isinstance(payload, dict) else {}) or {}
+    result = CaptureResult(
+        **data,
+        payment_gateway=payment_gateway,
+        idempotencyKey=idempotency_key,
+        idempotency_key=idempotency_key,
     )
-    return CaptureResult(
-        capture_id=capture_id,
-        object=data.get("object", "debit"),
-        mandate_id=data.get("payment_method_reference_id") or data.get("authorization_id") or data.get("mandate_id") or data.get("pre_authorization_id", ""),
-        token_id=data.get("token_id") or data.get("payment_token", ""),
-        customer_id=customer.get("customer_id") or data.get("customer_id") or customer.get("merchant_customer_reference") or data.get("customer_reference", ""),
-        merchant_id=data.get("merchant_id", ""),
-        order_id=payment_data.get("order_id") or data.get("oms_order_id") or data.get("order_id") or data.get("merchant_order_reference", ""),
-        order_status=payment_data.get("order_status") or data.get("order_status") or data.get("status", ""),
-        payment_id=external_payment_id or data.get("debit_id", ""),
-        payment_status=payment_sbmd_data.get("upstream_payment_status") or metadata.get("upstream_payment_status") or payment_data.get("payment_status") or payment_data.get("order_status") or data.get("payment_status") or data.get("status", ""),
-        amount=Amount(value=int(amt.get("value", 0) or 0), currency=amt.get("currency", data.get("currency", "INR"))),
-        upi_txn_id=sbmd_data.get("upi_txn_id", data.get("upi_txn_id", "")),
-        receipt=data.get("receipt") or {
-            "reference": capture_id,
-            "oms_payment_id": data.get("oms_payment_id", ""),
-            "external_payment_id": external_payment_id,
-        },
-        description=data.get("description"),
-        merchant_order_reference=data.get("merchant_order_reference") or data.get("merchant_payment_debit_reference"),
-        metadata=metadata,
-        settled_at=sbmd_data.get("settled_at", data.get("settled_at", "")),
-        created_at=data.get("created_at", ""),
-        raw=data,
-    )
+    if pending:
+        result.pending = True
+        result.message = "Payment accepted and still processing"
+        if retry_after_ms is not None:
+            result.retryAfter = retry_after_ms
+    return result

@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional
 
 from .config import Amount
@@ -36,31 +36,33 @@ class CaptureReceipt:
     token_remaining: Dict[str, Any]
 
 
-@dataclass
-class CaptureResult:
-    """Normalized debit/capture response from the P3P service."""
+class CaptureResult(dict[str, Any]):
+    """Raw debit/capture response with SDK context fields attached.
 
-    capture_id: str
-    object: str
-    mandate_id: str
-    token_id: str
-    customer_id: str
-    merchant_id: str
-    order_id: str
-    order_status: str
-    payment_id: str
-    payment_status: str
-    amount: Amount
-    upi_txn_id: str
-    receipt: Dict[str, Any]
-    description: Optional[str]
-    merchant_order_reference: Optional[str]
-    metadata: Optional[Dict[str, str]]
-    settled_at: str
-    created_at: str
-    raw: Dict[str, Any] = field(default_factory=dict)
-    payment_gateway: Optional[PaymentGateway] = None
-    payment_method: Optional[PaymentMethod] = None
+    The dict may include SDK-added context such as `payment_gateway`,
+    `idempotencyKey`, `pending`, `message`, and `retryAfter`.
+    """
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError as exc:  # pragma: no cover - mirrors normal attribute access failure
+            raise AttributeError(name) from exc
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        self[name] = value
+
+
+PENDING_DEBIT_STATUSES = frozenset({
+    "PENDING",
+    "CREATED",
+    "OMS_PAYMENT_SUBMITTED",
+    "PROCESSING",
+})
+
+
+def is_pending_debit_status(status: Any) -> bool:
+    return str(status or "").strip().upper() in PENDING_DEBIT_STATUSES
 
 
 @dataclass
@@ -79,7 +81,7 @@ class ReceiptData:
     timestamp: str
     reference: str
     challengeId: str
-    settlement: Settlement
+    settlement: Optional[Settlement]
     paymentGateway: Optional[PaymentGateway] = None
     paymentMethod: Optional[PaymentMethod] = None
     orderId: Optional[str] = None

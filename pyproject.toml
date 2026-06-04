@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pinelabs-p3p-server-sdk"
-version = "0.1.0"
+name = "pinelabs-online-p3p-server-sdk"
+version = "0.1.4"
 description = "Pine Labs Online P3P Server SDK — x402 Pine Labs Online P3P server middleware (Python)"
 readme = "README.md"
 requires-python = ">=3.9"
