@@ -26,6 +26,9 @@ class ChallengeGenerator:
 
     def generate(self, options: ChargeOptions) -> ChallengeResult:
         """Generate a challenge and problem-details response for HTTP 402."""
+        val = options.amount.value
+        if not isinstance(val, int) or isinstance(val, bool) or val <= 0:
+            raise ValueError("ChargeOptions: amount.value must be a positive integer (paise)")
         expiry_seconds = options.challengeExpirySeconds or self._default_expiry
         expires_dt = datetime.now(timezone.utc) + timedelta(seconds=expiry_seconds)
         expires = expires_dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{expires_dt.microsecond // 1000:03d}Z"

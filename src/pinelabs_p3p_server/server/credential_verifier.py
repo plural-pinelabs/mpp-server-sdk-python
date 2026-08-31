@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac as _hmac
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
@@ -90,7 +91,10 @@ class CredentialVerifier:
             challenge.expires,
         )
 
-        if challenge.id != expected_id:
+        if not _hmac.compare_digest(
+            challenge.id.encode() if isinstance(challenge.id, str) else challenge.id,
+            expected_id.encode() if isinstance(expected_id, str) else expected_id,
+        ):
             return VerificationResult(
                 valid=False,
                 credential=credential,
@@ -154,7 +158,7 @@ def _dict_to_credential(raw: Dict[str, Any]) -> Credential:
             type=payload.get("type", "token"),
             token=payload.get("token", ""),
             payment_method=_parse_payment_method(payload.get("payment_method", payload.get("paymentMethod"))),
-            customer_reference=payload.get("customer_reference") or payload.get("customerReference"),
+            payment_method_reference_id=payload.get("payment_method_reference_id") or payload.get("paymentMethodReferenceId"),
             mobile_number=payload.get("mobile_number") or payload.get("mobileNumber"),
         ),
     )
@@ -176,8 +180,14 @@ def _parse_payment_gateway(value: Any) -> Optional[PaymentGateway]:
 
 
 def _parse_payment_method(value: Any) -> PaymentMethod:
-    if value == PaymentMethod.UPI_RESERVE_PAY.value:
-        return PaymentMethod.UPI_RESERVE_PAY
+    if value == PaymentMethod.RESERVE_PAY.value:
+        return PaymentMethod.RESERVE_PAY
+    if value == PaymentMethod.OTM.value:
+        return PaymentMethod.OTM
+    if value == PaymentMethod.CARD.value:
+        return PaymentMethod.CARD
+    if value == PaymentMethod.CREDIT_EMI.value:
+        return PaymentMethod.CREDIT_EMI
     if value == PaymentMethod.Crypto.value:
         return PaymentMethod.Crypto
     return value or ""

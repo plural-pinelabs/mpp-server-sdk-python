@@ -27,7 +27,24 @@ DEFAULT_REALM: str = P3PEnvironment.PRODUCTION
 def is_p3p_environment(value: object) -> bool:
     if value in (P3PEnvironment.SANDBOX, P3PEnvironment.PRODUCTION):
         return True
-    return isinstance(value, str) and value.startswith(("http://", "https://"))
+    if isinstance(value, str):
+        if value.startswith("https://"):
+            return True
+        if value.startswith("http://"):
+            return _is_localhost_url(value)
+    return False
+
+
+def _is_localhost_url(url: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+        hostname = urlparse(url).hostname or ""
+        return (
+            hostname in ("localhost", "127.0.0.1", "::1", "host.docker.internal")
+            or "." not in hostname  # single-label: Docker service names, local dev
+        )
+    except Exception:
+        return False
 
 
 def resolve_p3p_base_url(env: str) -> str:

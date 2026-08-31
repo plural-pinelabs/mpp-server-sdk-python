@@ -27,13 +27,18 @@ from pinelabs_p3p_server import (
 config = PineLabsOnlineServerConfig(
     clientId="...",
     clientSecret="...",
+    merchantId="...",
     env=P3PEnvironment.SANDBOX,
     paymentGateway=PaymentGateway.PineLabsOnline,
-    availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+    availablePaymentMethods=[PaymentMethod.RESERVE_PAY, PaymentMethod.OTM, PaymentMethod.CARD],
 )
 ```
 
-`clientId` and `clientSecret` are used internally for `POST /api/auth/v1/token`.
+`clientId`, `clientSecret`, and `merchantId` are mandatory. The client
+credentials are used internally for `POST /api/auth/v1/token`; `merchantId`
+is sent as `Merchant-ID` on MPP calls for `RESERVE_PAY`, `OTM`, `CARD`, and
+`CREDIT_EMI`. Missing MID is rejected while creating the SDK, before any
+network call.
 The local challenge HMAC key is derived internally from `clientSecret` with a
 stable SDK prefix, so there is no separate challenge-signing config field.
 The SDK caches and refreshes bearer tokens before expiry. `env` selects the
@@ -49,20 +54,89 @@ Environment defaults:
 ## Mandates
 
 ```python
-from pinelabs_p3p_server import Amount, CreateMandateOptions, PineLabsOnlineP3P
+from pinelabs_p3p_server import Amount, CreateMandateOptions, CreatePreAuthorizationOptions, PineLabsOnlineP3P
 
 p3p = PineLabsOnlineP3P.create(config)
 mandate = p3p.create_mandate(CreateMandateOptions(
     mobileNumber="9876543210",
     customerReference="9876543210",
     amount=Amount(value=100000, currency="INR"),
-    paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+    paymentMethod=PaymentMethod.RESERVE_PAY,
     validityInDays=20,
 ))
 ```
 
 This maps to `POST /mpp/v1/pre-authorize` and sends
 `customer.mobile_number`.
+
+Card pre-authorization uses the same endpoint and returns the service contract
+shape directly:
+
+```python
+pre_authorization = p3p.create_pre_authorization(CreatePreAuthorizationOptions(
+    paymentMethod=PaymentMethod.CREDIT_EMI,
+    mobileNumber="9876543210",
+    amount=Amount(value=1000, currency="INR"),
+    validityInDays=7,
+    description="Credit EMI pre-auth for order-123",
+    merchantMetadata={
+        "p3p_offer_required": "true",
+        # The discovery response filtered to the one selected
+        # entity -> tenure -> offer.
+        "offer_data": selected_offer_data,
+    },
+))
+
+print(pre_authorization.payment_method_reference_id)
+# `challenge_url` / `redirect_url` points at the hosted checkout where the
+# customer completes 3DS / card authorization. Open it in an iframe or
+# redirect the customer to it, then wait for the mandate to become ACTIVE
+# before capturing.
+print(pre_authorization.redirect_url or pre_authorization.challenge_url)
+```
+
+`merchantMetadata.offer_data` accepts the selected offer JSON object directly
+at the SDK boundary. The SDK serializes it into Pine's string-valued merchant
+metadata wire field; do not base64-encode it or include unselected entities,
+tenures, or offers.
+`PaymentMethod.CREDIT_EMI` is preserved as `payment_method: "CREDIT_EMI"` in
+the Pine pre-authorization request; the SDK never changes it to `CARD`.
+
+### End-to-End Card Payment
+
+The full CARD flow uses `payment_method_reference_id` returned by
+`create_pre_authorization` to link the eventual debit back to the customer's
+authorized card:
+
+```python
+import time
+
+# 1. Create a card pre-authorization (customer completes the hosted checkout).
+pre_auth = p3p.create_pre_authorization(CreatePreAuthorizationOptions(
+    paymentMethod=PaymentMethod.CARD,
+    mobileNumber="9876543210",
+    amount=Amount(value=50000, currency="INR"),
+    validityInDays=7,
+))
+
+# 2. Direct the customer to the checkout URL (iframe or redirect).
+checkout_url = pre_auth.redirect_url or pre_auth.challenge_url
+
+# 3. Poll the mandate until it becomes ACTIVE.
+mandate = p3p.get_mandate(pre_auth.payment_method_reference_id)
+while mandate.payment_status != "ACTIVE":
+    time.sleep(2)
+    mandate = p3p.get_mandate(pre_auth.payment_method_reference_id)
+
+# 4. Charge the card via the standard 402 flow. The Server SDK issues a
+#    Payment challenge and, once the Client SDK returns a Payment credential
+#    that carries a token bound to this pre-auth, calls POST /mpp/v1/debit
+#    with `payment_method_reference_id=pre_auth.payment_method_reference_id`.
+```
+
+On the client side, the Client SDK creates the payment token with
+`paymentMethod=PaymentMethod.CARD` — see the Client SDK README for the
+matching runtime context.
 
 ## Paid Resource Flow
 
@@ -93,7 +167,7 @@ from pinelabs_p3p_server import CaptureOptions
 result = p3p.capture(CaptureOptions(
     token="MPP_TOK_123",
     amount=Amount(value=50000, currency="INR"),
-    paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+    paymentMethod=PaymentMethod.RESERVE_PAY,
     customerReference="9876543210",
     mobileNumber="9876543210",
     challengeId="ch_123",
@@ -106,16 +180,21 @@ The debit body uses `customer.mobile_number`, `payment_amount`,
 not send `Merchant-ID`.
 
 If `/mpp/v1/debit` returns `202 Accepted`, the SDK treats that as an
-accepted-but-processing debit:
+accepted-but-processing debit. It does **not** re-POST `/mpp/v1/debit` — Pine
+Labs rejects a resubmit with the same `Idempotency-Key` (`422`). Instead the
+SDK resolves the terminal status by polling the read-only endpoint
+`GET /mpp/v1/debit/{id}`:
 
-- retries the same debit with the same `Idempotency-Key`
-- respects `Retry-After` when Pine Labs returns it
+- polls up to `maxRetries` times until the debit reaches a terminal status
+- respects `Retry-After` from the `202` response when Pine Labs returns it
 - falls back to `initialRetryDelayMs` otherwise
-- counts those pending retries against `maxRetries`
+- genuine transient failures on the initial POST (network errors, HTTP 429,
+  and 5xx) are still retried by the SDK's request layer
 
-If pending retries are exhausted and the debit is still non-terminal, the SDK
-returns a pending result and the middleware should return `202` without serving
-the protected resource.
+If the poll budget is exhausted and the debit is still non-terminal, the SDK
+returns a pending result (with `idempotencyKey`) and the middleware should
+return `202` without serving the protected resource. Application code can
+reconcile later via `p3p.get_debit_status(idempotency_key)`.
 
 ## Generic Middleware Helper
 

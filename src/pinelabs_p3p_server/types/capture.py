@@ -21,6 +21,7 @@ class CaptureOptions:
     merchantOrderReference: Optional[str] = None
     metadata: Optional[Dict[str, str]] = None
     idempotencyKey: Optional[str] = None
+    paymentMethodReferenceId: Optional[str] = None
     customerReference: Optional[str] = None
     mobileNumber: Optional[str] = None
     challengeId: Optional[str] = None

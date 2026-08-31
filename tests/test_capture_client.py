@@ -56,8 +56,9 @@ def test_capture_client_uses_local_sbmd_route_for_localhost_base() -> None:
         PineLabsOnlineServerConfig(
             clientId="server-client",
             clientSecret="server-secret",
+            merchantId="merchant-test",
             paymentGateway=PaymentGateway.PineLabsOnline,
-            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+            availablePaymentMethods=[PaymentMethod.RESERVE_PAY, PaymentMethod.OTM],
                 env="http://localhost:8081",
         ),
         http_client=client,
@@ -67,7 +68,7 @@ def test_capture_client_uses_local_sbmd_route_for_localhost_base() -> None:
         CaptureOptions(
             token="ppt_local_123",
             amount=Amount(value=100, currency="INR"),
-            paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+            paymentMethod=PaymentMethod.RESERVE_PAY,
             merchantOrderReference="order-123",
             customerReference="cust-ref-123",
             mobileNumber="9876543210",
@@ -86,7 +87,7 @@ def test_capture_client_uses_local_sbmd_route_for_localhost_base() -> None:
         "challenge_id": "ch_test",
     }
     assert "Request-Hash" not in debit_request.headers
-    assert "Merchant-ID" not in debit_request.headers
+    assert debit_request.headers["Merchant-ID"] == "merchant-test"
     assert result.type == "RESERVE_PAY"
     assert result.payment_method_reference_id == "v1-sub-260422154824-aa-M3qU2m"
     assert result.payment_id == "088d3a01-5b05-43c7-9e1b-ddb11d2db0e4"
@@ -95,6 +96,150 @@ def test_capture_client_uses_local_sbmd_route_for_localhost_base() -> None:
     assert result.status == "CONFIRMED"
     assert result.payment_gateway == PaymentGateway.PineLabsOnline
     assert "payment_method" not in result
+
+
+def test_capture_client_sends_card_debit_with_pre_authorization_reference() -> None:
+    class _CardDebitTransport(httpx.BaseTransport):
+        def __init__(self) -> None:
+            self.requests: list[httpx.Request] = []
+
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            self.requests.append(request)
+            if request.url.path.endswith("/api/auth/v1/token"):
+                return httpx.Response(200, json={"data": {"access_token": "server-access-token", "expires_in": 300}})
+
+            body = json.loads(request.content.decode() or "{}")
+            assert request.headers["Authorization"] == "Bearer server-access-token"
+            assert request.headers["Idempotency-Key"] == "debit-card-key-123"
+            assert body == {
+                "payment_method": "CARD",
+                "customer": {"mobile_number": "9876543210"},
+                "payment_amount": {"value": 300, "currency": "INR"},
+                "payment_token": "P3P_TOK_CARD_123",
+                "challenge_id": "ch_card_123",
+                "payment_method_reference_id": "auth_card_123",
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "type": "CARD",
+                        "payment_method": "CARD",
+                        "payment_method_reference_id": "auth_card_123",
+                        "merchant_payment_debit_reference": "debit-card-key-123",
+                        "amount": {"value": 300, "currency": "INR"},
+                        "status": "PROCESSED",
+                        "payment_data": {
+                            "order_id": "ord_card_123",
+                            "order_status": "PROCESSED",
+                        },
+                    }
+                },
+            )
+
+    transport = _CardDebitTransport()
+    client = httpx.Client(transport=transport)
+    capture = CaptureClient(
+        PineLabsOnlineServerConfig(
+            clientId="server-client",
+            clientSecret="server-secret",
+            merchantId="merchant-test",
+            paymentGateway=PaymentGateway.PineLabsOnline,
+            availablePaymentMethods=[PaymentMethod.CARD],
+            env="http://localhost:8081",
+        ),
+        http_client=client,
+    )
+
+    result = capture.capture(
+        CaptureOptions(
+            token="P3P_TOK_CARD_123",
+            amount=Amount(value=300, currency="INR"),
+            paymentMethod=PaymentMethod.CARD,
+            paymentMethodReferenceId="auth_card_123",
+            mobileNumber="9876543210",
+            challengeId="ch_card_123",
+            idempotencyKey="debit-card-key-123",
+        )
+    )
+
+    assert result.payment_method == "CARD"
+    assert result.payment_method_reference_id == "auth_card_123"
+    assert result.merchant_payment_debit_reference == "debit-card-key-123"
+    assert result.status == "PROCESSED"
+    assert [request.url.path for request in transport.requests] == ["/api/auth/v1/token", "/mpp/v1/debit"]
+
+
+def test_capture_client_sends_credit_emi_debit_with_pre_authorization_reference() -> None:
+    class _CreditEmiDebitTransport(httpx.BaseTransport):
+        def __init__(self) -> None:
+            self.requests: list[httpx.Request] = []
+
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            self.requests.append(request)
+            if request.url.path.endswith("/api/auth/v1/token"):
+                return httpx.Response(200, json={"data": {"access_token": "server-access-token", "expires_in": 300}})
+            body = json.loads(request.content.decode() or "{}")
+            assert body["payment_method"] == "CREDIT_EMI"
+            assert body["payment_method_reference_id"] == "auth_credit_emi_123"
+            return httpx.Response(200, json={"data": {
+                "status": "PROCESSED",
+                "payment_method": "CREDIT_EMI",
+                "payment_method_reference_id": "auth_credit_emi_123",
+                "amount": {"value": 14897000, "currency": "INR"},
+            }})
+
+    transport = _CreditEmiDebitTransport()
+    client = httpx.Client(transport=transport)
+    capture = CaptureClient(
+        PineLabsOnlineServerConfig(
+            clientId="server-client",
+            clientSecret="server-secret",
+            merchantId="merchant-test",
+            paymentGateway=PaymentGateway.PineLabsOnline,
+            availablePaymentMethods=[PaymentMethod.CREDIT_EMI],
+            env="http://localhost:8081",
+        ),
+        http_client=client,
+    )
+    result = capture.capture(CaptureOptions(
+        token="P3P_TOK_CREDIT_EMI_123",
+        amount=Amount(value=14897000, currency="INR"),
+        paymentMethod=PaymentMethod.CREDIT_EMI,
+        paymentMethodReferenceId="auth_credit_emi_123",
+        mobileNumber="9390012811",
+        challengeId="ch_credit_emi_123",
+        idempotencyKey="debit-credit-emi-123",
+    ))
+
+    assert result.payment_method == "CREDIT_EMI"
+    assert result.payment_method_reference_id == "auth_credit_emi_123"
+    assert [request.url.path for request in transport.requests] == ["/api/auth/v1/token", "/mpp/v1/debit"]
+
+
+def test_capture_client_rejects_credit_emi_without_pre_authorization_reference_before_network() -> None:
+    transport = _RecordingTransport()
+    client = httpx.Client(transport=transport)
+    capture = CaptureClient(
+        PineLabsOnlineServerConfig(
+            clientId="server-client",
+            clientSecret="server-secret",
+            merchantId="merchant-test",
+            paymentGateway=PaymentGateway.PineLabsOnline,
+            availablePaymentMethods=[PaymentMethod.CREDIT_EMI],
+            env="http://localhost:8081",
+        ),
+        http_client=client,
+    )
+    with pytest.raises(P3PCaptureError, match="paymentMethodReferenceId is required for CREDIT_EMI"):
+        capture.capture(CaptureOptions(
+            token="P3P_TOK_CREDIT_EMI_123",
+            amount=Amount(value=1000, currency="INR"),
+            paymentMethod=PaymentMethod.CREDIT_EMI,
+            mobileNumber="9390012811",
+            challengeId="ch_credit_emi_123",
+        ))
+    assert transport.requests == []
 
 
 def test_capture_client_keeps_payment_method_from_upstream_response() -> None:
@@ -121,8 +266,9 @@ def test_capture_client_keeps_payment_method_from_upstream_response() -> None:
         PineLabsOnlineServerConfig(
             clientId="server-client",
             clientSecret="server-secret",
+            merchantId="merchant-test",
             paymentGateway=PaymentGateway.PineLabsOnline,
-            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+            availablePaymentMethods=[PaymentMethod.RESERVE_PAY, PaymentMethod.OTM],
             env="http://localhost:8081",
         ),
         http_client=client,
@@ -132,7 +278,7 @@ def test_capture_client_keeps_payment_method_from_upstream_response() -> None:
         CaptureOptions(
             token="ppt_local_123",
             amount=Amount(value=100, currency="INR"),
-            paymentMethod=PaymentMethod.Crypto,
+            paymentMethod=PaymentMethod.OTM,
             merchantOrderReference="order-123",
             customerReference="cust-ref-123",
             mobileNumber="9876543210",
@@ -150,8 +296,9 @@ def test_capture_client_exchanges_server_token_for_debit() -> None:
         PineLabsOnlineServerConfig(
             clientId="server-client",
             clientSecret="server-secret",
+            merchantId="merchant-test",
             paymentGateway=PaymentGateway.PineLabsOnline,
-            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+            availablePaymentMethods=[PaymentMethod.RESERVE_PAY, PaymentMethod.OTM],
                 env="http://localhost:8081",
         ),
         http_client=client,
@@ -161,7 +308,7 @@ def test_capture_client_exchanges_server_token_for_debit() -> None:
         CaptureOptions(
             token="ppt_local_123",
             amount=Amount(value=100, currency="INR"),
-            paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+            paymentMethod=PaymentMethod.RESERVE_PAY,
             merchantOrderReference="order-123",
             customerReference="cust-ref-123",
             mobileNumber="9876543210",
@@ -172,32 +319,32 @@ def test_capture_client_exchanges_server_token_for_debit() -> None:
     assert "/api/auth/v1/token" in [request.url.path for request in transport.requests]
     debit_request = next(req for req in transport.requests if req.url.path == "/mpp/v1/debit")
     assert debit_request.headers["Authorization"] == "Bearer server-access-token"
-    assert "Merchant-ID" not in debit_request.headers
+    assert debit_request.headers["Merchant-ID"] == "merchant-test"
 
 
-def test_capture_client_requires_customer_reference_for_v2_debit() -> None:
+def test_capture_client_requires_mobile_number_for_v2_debit() -> None:
     transport = _RecordingTransport()
     client = httpx.Client(transport=transport)
     capture = CaptureClient(
         PineLabsOnlineServerConfig(
             clientId="server-client",
             clientSecret="server-secret",
+            merchantId="merchant-test",
             paymentGateway=PaymentGateway.PineLabsOnline,
-            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+            availablePaymentMethods=[PaymentMethod.RESERVE_PAY, PaymentMethod.OTM],
                 env="http://localhost:8081",
         ),
         http_client=client,
     )
 
-    with pytest.raises(P3PCaptureError, match="customerReference"):
+    with pytest.raises(P3PCaptureError, match="mobileNumber"):
         capture.capture(
             CaptureOptions(
                 token="ppt_local_123",
                 amount=Amount(value=100, currency="INR"),
-                paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+                paymentMethod=PaymentMethod.RESERVE_PAY,
                 merchantOrderReference="order-123",
                 challengeId="ch_test",
-                mobileNumber="9876543210",
                 metadata={"mandate_id": "mnd_local_123"},
             )
         )
@@ -212,8 +359,9 @@ def test_capture_client_requires_challenge_id_for_v2_debit() -> None:
         PineLabsOnlineServerConfig(
             clientId="server-client",
             clientSecret="server-secret",
+            merchantId="merchant-test",
             paymentGateway=PaymentGateway.PineLabsOnline,
-            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+            availablePaymentMethods=[PaymentMethod.RESERVE_PAY, PaymentMethod.OTM],
                 env="http://localhost:8081",
         ),
         http_client=client,
@@ -224,7 +372,7 @@ def test_capture_client_requires_challenge_id_for_v2_debit() -> None:
             CaptureOptions(
                 token="ppt_local_123",
                 amount=Amount(value=100, currency="INR"),
-                paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+                paymentMethod=PaymentMethod.RESERVE_PAY,
                 merchantOrderReference="order-123",
                 customerReference="cust-ref-123",
                 mobileNumber="9876543210",
@@ -242,8 +390,9 @@ def test_capture_client_uses_local_sbmd_route_for_host_docker_internal_base() ->
         PineLabsOnlineServerConfig(
             clientId="server-client",
             clientSecret="server-secret",
+            merchantId="merchant-test",
             paymentGateway=PaymentGateway.PineLabsOnline,
-            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+            availablePaymentMethods=[PaymentMethod.RESERVE_PAY, PaymentMethod.OTM],
                 env="http://host.docker.internal:8081",
         ),
         http_client=client,
@@ -253,7 +402,7 @@ def test_capture_client_uses_local_sbmd_route_for_host_docker_internal_base() ->
         CaptureOptions(
             token="ppt_local_123",
             amount=Amount(value=100, currency="INR"),
-            paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+            paymentMethod=PaymentMethod.RESERVE_PAY,
             merchantOrderReference="order-123",
             customerReference="cust-ref-123",
             mobileNumber="9876543210",
@@ -264,7 +413,7 @@ def test_capture_client_uses_local_sbmd_route_for_host_docker_internal_base() ->
 
     assert result.type == "RESERVE_PAY"
     debit_request = next(req for req in transport.requests if req.url.path == "/mpp/v1/debit")
-    assert "Merchant-ID" not in debit_request.headers
+    assert debit_request.headers["Merchant-ID"] == "merchant-test"
 
 
 class _ActualOnlyTransport(httpx.BaseTransport):
@@ -304,8 +453,9 @@ def test_capture_client_does_not_use_internal_mpp_mock_route() -> None:
         PineLabsOnlineServerConfig(
             clientId="server-client",
             clientSecret="server-secret",
+            merchantId="merchant-test",
             paymentGateway=PaymentGateway.PineLabsOnline,
-            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+            availablePaymentMethods=[PaymentMethod.RESERVE_PAY, PaymentMethod.OTM],
                 env="http://api:8000/api/v1/internal-mpp",
         ),
         http_client=client,
@@ -315,7 +465,7 @@ def test_capture_client_does_not_use_internal_mpp_mock_route() -> None:
         CaptureOptions(
             token="ppt_real_123",
             amount=Amount(value=100, currency="INR"),
-            paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+            paymentMethod=PaymentMethod.RESERVE_PAY,
             merchantOrderReference="order-123",
             customerReference="cust-ref-123",
             mobileNumber="9876543210",
@@ -354,8 +504,9 @@ def test_capture_client_preserves_top_level_error_details() -> None:
         PineLabsOnlineServerConfig(
             clientId="server-client",
             clientSecret="server-secret",
+            merchantId="merchant-test",
             paymentGateway=PaymentGateway.PineLabsOnline,
-            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+            availablePaymentMethods=[PaymentMethod.RESERVE_PAY, PaymentMethod.OTM],
                 env="http://localhost:8081",
         ),
         http_client=httpx.Client(transport=_TopLevelErrorTransport()),
@@ -366,7 +517,7 @@ def test_capture_client_preserves_top_level_error_details() -> None:
             CaptureOptions(
                 token="ppt_local_123",
                 amount=Amount(value=25000, currency="INR"),
-                paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+                paymentMethod=PaymentMethod.RESERVE_PAY,
                 merchantOrderReference="quote_123",
                 customerReference="cust-ref-123",
                 mobileNumber="9876543210",
@@ -384,16 +535,20 @@ def test_capture_client_preserves_top_level_error_details() -> None:
     }
 
 
-def test_capture_client_retries_pending_debit_with_same_idempotency_key_and_returns_pending(monkeypatch) -> None:
+def test_capture_client_polls_debit_status_after_pending_debit_and_resolves(monkeypatch) -> None:
     sleep_calls: list[float] = []
-    debit_idempotency_keys: list[str] = []
+    debit_post_keys: list[str] = []
+    status_poll_paths: list[str] = []
 
-    class _PendingTransport(httpx.BaseTransport):
+    class _PendingThenResolvedTransport(httpx.BaseTransport):
         def handle_request(self, request: httpx.Request) -> httpx.Response:
             if request.url.path.endswith("/api/auth/v1/token"):
                 return httpx.Response(200, json={"data": {"access_token": "server-access-token", "expires_in": 300}})
+            # The debit is POSTed exactly once; the async result is resolved by
+            # polling the read-only GET /mpp/v1/debit/{id} endpoint.
             if request.url.path == "/mpp/v1/debit":
-                debit_idempotency_keys.append(request.headers["Idempotency-Key"])
+                assert request.method == "POST"
+                debit_post_keys.append(request.headers["Idempotency-Key"])
                 return httpx.Response(
                     202,
                     headers={"Retry-After": "0"},
@@ -405,6 +560,32 @@ def test_capture_client_retries_pending_debit_with_same_idempotency_key_and_retu
                         }
                     },
                 )
+            if request.url.path == "/mpp/v1/debit/idem_key_20260601_001":
+                assert request.method == "GET"
+                status_poll_paths.append(request.url.path)
+                # First poll still processing; second poll resolves.
+                if len(status_poll_paths) == 1:
+                    return httpx.Response(
+                        200,
+                        json={
+                            "data": {
+                                "merchant_payment_debit_reference": "pay_ref_pending",
+                                "amount": {"value": 25000, "currency": "INR"},
+                                "status": "PROCESSING",
+                            }
+                        },
+                    )
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "merchant_payment_debit_reference": "pay_ref_processed",
+                            "amount": {"value": 25000, "currency": "INR"},
+                            "status": "PROCESSED",
+                            "payment_data": {"order_id": "ord_123", "order_status": "PROCESSED"},
+                        }
+                    },
+                )
             raise AssertionError(f"unexpected request path {request.url.path}")
 
     monkeypatch.setattr(capture_client_module, "time", SimpleNamespace(sleep=sleep_calls.append), raising=False)
@@ -412,20 +593,21 @@ def test_capture_client_retries_pending_debit_with_same_idempotency_key_and_retu
         PineLabsOnlineServerConfig(
             clientId="server-client",
             clientSecret="server-secret",
+            merchantId="merchant-test",
             paymentGateway=PaymentGateway.PineLabsOnline,
-            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+            availablePaymentMethods=[PaymentMethod.RESERVE_PAY, PaymentMethod.OTM],
             env="http://localhost:8081",
             maxRetries=2,
             initialRetryDelayMs=50,
         ),
-        http_client=httpx.Client(transport=_PendingTransport()),
+        http_client=httpx.Client(transport=_PendingThenResolvedTransport()),
     )
 
     result = capture.capture(
         CaptureOptions(
             token="ppt_local_123",
             amount=Amount(value=25000, currency="INR"),
-            paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+            paymentMethod=PaymentMethod.RESERVE_PAY,
             customerReference="cust-ref-123",
             mobileNumber="9876543210",
             challengeId="ch_test",
@@ -433,31 +615,46 @@ def test_capture_client_retries_pending_debit_with_same_idempotency_key_and_retu
         )
     )
 
-    assert result.status == "PROCESSING"
+    assert result.status == "PROCESSED"
     assert result.idempotencyKey == "idem_key_20260601_001"
-    assert result.retryAfter == 0
-    assert debit_idempotency_keys == [
-        "idem_key_20260601_001",
-        "idem_key_20260601_001",
-        "idem_key_20260601_001",
+    # Debit POSTed exactly once; resolution came from GET-polling the status.
+    assert debit_post_keys == ["idem_key_20260601_001"]
+    assert status_poll_paths == [
+        "/mpp/v1/debit/idem_key_20260601_001",
+        "/mpp/v1/debit/idem_key_20260601_001",
     ]
+    # Retry-After: 0 on the 202 drives a 0ms wait before each poll.
     assert sleep_calls == [0.0, 0.0]
 
 
-def test_capture_client_uses_fallback_delay_for_pending_debit_without_retry_after(monkeypatch) -> None:
+def test_capture_client_returns_pending_after_poll_budget_exhausted_using_fallback_delay(monkeypatch) -> None:
     sleep_calls: list[float] = []
+    debit_post_calls = 0
+    status_poll_calls = 0
 
     class _PendingFallbackTransport(httpx.BaseTransport):
-        def __init__(self) -> None:
-            self.debit_calls = 0
-
         def handle_request(self, request: httpx.Request) -> httpx.Response:
+            nonlocal debit_post_calls, status_poll_calls
             if request.url.path.endswith("/api/auth/v1/token"):
                 return httpx.Response(200, json={"data": {"access_token": "server-access-token", "expires_in": 300}})
             if request.url.path == "/mpp/v1/debit":
-                self.debit_calls += 1
+                debit_post_calls += 1
                 return httpx.Response(
                     202,
+                    json={
+                        "data": {
+                            "merchant_payment_debit_reference": "pay_ref_pending",
+                            "amount": {"value": 25000, "currency": "INR"},
+                            "status": "PENDING",
+                        }
+                    },
+                )
+            # The status poll keeps reporting PENDING, so the debit stays pending.
+            if request.url.path == "/mpp/v1/debit/idem_key_20260601_002":
+                assert request.method == "GET"
+                status_poll_calls += 1
+                return httpx.Response(
+                    200,
                     json={
                         "data": {
                             "merchant_payment_debit_reference": "pay_ref_pending",
@@ -474,8 +671,9 @@ def test_capture_client_uses_fallback_delay_for_pending_debit_without_retry_afte
         PineLabsOnlineServerConfig(
             clientId="server-client",
             clientSecret="server-secret",
+            merchantId="merchant-test",
             paymentGateway=PaymentGateway.PineLabsOnline,
-            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+            availablePaymentMethods=[PaymentMethod.RESERVE_PAY, PaymentMethod.OTM],
             env="http://localhost:8081",
             maxRetries=1,
             initialRetryDelayMs=321,
@@ -487,7 +685,7 @@ def test_capture_client_uses_fallback_delay_for_pending_debit_without_retry_afte
         CaptureOptions(
             token="ppt_local_123",
             amount=Amount(value=25000, currency="INR"),
-            paymentMethod=PaymentMethod.UPI_RESERVE_PAY,
+            paymentMethod=PaymentMethod.RESERVE_PAY,
             customerReference="cust-ref-123",
             mobileNumber="9876543210",
             challengeId="ch_test",
@@ -497,6 +695,10 @@ def test_capture_client_uses_fallback_delay_for_pending_debit_without_retry_afte
 
     assert result.status == "PENDING"
     assert result.retryAfter == 321
+    # Debit POSTed once, then polled once (maxRetries == 1) before giving up.
+    assert debit_post_calls == 1
+    assert status_poll_calls == 1
+    # No Retry-After header, so polling falls back to initialRetryDelayMs (321ms).
     assert sleep_calls == [0.321]
 
 
@@ -528,8 +730,9 @@ def test_capture_client_gets_debit_status_by_idempotency_key() -> None:
         PineLabsOnlineServerConfig(
             clientId="server-client",
             clientSecret="server-secret",
+            merchantId="merchant-test",
             paymentGateway=PaymentGateway.PineLabsOnline,
-            availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY, PaymentMethod.Crypto],
+            availablePaymentMethods=[PaymentMethod.RESERVE_PAY, PaymentMethod.OTM],
             env="http://localhost:8081",
         ),
         http_client=httpx.Client(transport=transport),

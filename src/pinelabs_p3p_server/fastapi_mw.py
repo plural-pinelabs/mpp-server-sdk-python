@@ -11,10 +11,10 @@ Usage::
 
     app = FastAPI()
     config = PineLabsOnlineServerConfig(
-        clientId="…", clientSecret="…",
+        clientId="…", clientSecret="…", merchantId="…",
         env=P3PEnvironment.SANDBOX,
         paymentGateway=PaymentGateway.PineLabsOnline,
-        availablePaymentMethods=[PaymentMethod.UPI_RESERVE_PAY],
+        availablePaymentMethods=[PaymentMethod.RESERVE_PAY],
     )
 
     require_payment = PaymentRequired(config, ChargeOptions(
@@ -27,7 +27,6 @@ Usage::
         # The `Payment-Receipt` header is attached to the response automatically
         return {"data": "premium content"}
 """
-from __future__ import annotations
 
 from typing import Any, Callable, Union
 
@@ -39,7 +38,7 @@ except ImportError as exc:  # pragma: no cover
         "`pip install pinelabs-online-p3p-server-sdk[fastapi]`."
     ) from exc
 
-from .types.config import ChargeOptions, PineLabsOnlineServerConfig
+from .types.config import GRANTEX_TOKEN_HEADER, ChargeOptions, PineLabsOnlineServerConfig
 from .server.middleware.generic import decide_payment
 
 
@@ -65,9 +64,11 @@ class PaymentRequired:
     async def __call__(self, request: Request, response: Response) -> None:
         charge_options = self._charge(request) if callable(self._charge) else self._charge
         credential_header = request.headers.get("p3p-credential")
+        grantex_token_header = request.headers.get(GRANTEX_TOKEN_HEADER)
 
         decision = decide_payment(
             credential_header=credential_header,
+            grantex_token_header=grantex_token_header,
             config=self._config,
             charge_options=charge_options,
         )

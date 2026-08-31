@@ -24,6 +24,7 @@ class CredentialPayload:
     type: Literal["token"]
     token: str
     payment_method: PaymentMethod
+    payment_method_reference_id: Optional[str] = None
     customer_reference: Optional[str] = None
     mobile_number: Optional[str] = None
 
