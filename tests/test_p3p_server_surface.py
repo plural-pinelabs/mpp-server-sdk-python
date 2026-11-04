@@ -471,6 +471,92 @@ def test_server_create_mandate_preserves_snake_case_payment_method_options(monke
     }
 
 
+def test_server_create_google_pay_wallet_pre_authorization_uses_wallet_contract(monkeypatch) -> None:
+    class _WalletPreAuthTransport(httpx.BaseTransport):
+        def __init__(self) -> None:
+            self.requests: list[httpx.Request] = []
+
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            self.requests.append(request)
+            if request.url.path == "/api/auth/v1/token":
+                return httpx.Response(200, json={"data": {"access_token": "server-token", "expires_in": 300}})
+            if request.url.path == "/mpp/v1/pre-authorize":
+                assert json.loads(request.content.decode() or "{}") == {
+                    "payment_method": "WALLET",
+                    "payment_method_options": {"wallet_code": "GOOGLE_PAY"},
+                    "customer": {"mobile_number": "9876543210"},
+                    "amount": {"value": 1000, "currency": "INR"},
+                    "validity_in_days": 7,
+                }
+                return httpx.Response(200, json={"data": {
+                    "payment_method": "WALLET",
+                    "payment_method_reference_id": "auth_google_pay_123",
+                    "customer": {"mobile_number": "9876543210"},
+                    "challenge_url": "https://checkout.example/google-pay",
+                    "status": "PENDING",
+                    "amount": {"value": 1000, "currency": "INR"},
+                }})
+            return httpx.Response(404)
+
+    transport = _WalletPreAuthTransport()
+    real_client = httpx.Client
+
+    def _client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr("httpx.Client", _client)
+    server = PineLabsOnlineP3P.create(PineLabsOnlineServerConfig(
+        clientId="server-client",
+        clientSecret="server-secret",
+        merchantId="merchant-test",
+        env=P3PEnvironment.SANDBOX,
+        paymentGateway=PaymentGateway.PineLabsOnline,
+        availablePaymentMethods=[PaymentMethod.WALLET],
+        maxRetries=0,
+    ))
+
+    pre_authorization = server.create_pre_authorization(CreatePreAuthorizationOptions(
+        paymentMethod=PaymentMethod.WALLET,
+        paymentMethodOptions={"wallet_code": "GOOGLE_PAY"},
+        mobileNumber="9876543210",
+        amount=Amount(value=1000, currency="INR"),
+        idempotencyKey="google-pay-preauth-123",
+    ))
+
+    assert pre_authorization.payment_method == PaymentMethod.WALLET
+    assert pre_authorization.payment_method_reference_id == "auth_google_pay_123"
+    assert pre_authorization.challenge_url == "https://checkout.example/google-pay"
+    request = next(request for request in transport.requests if request.url.path == "/mpp/v1/pre-authorize")
+    assert request.headers["Idempotency-Key"] == "google-pay-preauth-123"
+
+
+@pytest.mark.parametrize(
+    "payment_method_options, error",
+    [
+        (None, "paymentMethodOptions is required for WALLET"),
+        ({}, "wallet_code to be GOOGLE_PAY"),
+        ({"wallet_code": "PAYTM"}, "wallet_code to be GOOGLE_PAY"),
+    ],
+)
+def test_server_rejects_non_google_wallet_pre_authorization_before_network(payment_method_options, error) -> None:
+    server = PineLabsOnlineP3P.create(PineLabsOnlineServerConfig(
+        clientId="server-client",
+        clientSecret="server-secret",
+        merchantId="merchant-test",
+        env=P3PEnvironment.SANDBOX,
+        paymentGateway=PaymentGateway.PineLabsOnline,
+        availablePaymentMethods=[PaymentMethod.WALLET],
+    ))
+
+    with pytest.raises(ValueError, match=error):
+        server.create_pre_authorization(CreatePreAuthorizationOptions(
+            paymentMethodOptions=payment_method_options,
+            mobileNumber="9876543210",
+            amount=Amount(value=1000, currency="INR"),
+        ))
+
+
 def test_server_get_debit_status_uses_env_and_returns_result(monkeypatch) -> None:
     transport = _ServerTransport()
     real_client = httpx.Client

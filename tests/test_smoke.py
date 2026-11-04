@@ -90,6 +90,7 @@ def test_credential_verifier_rejects_missing_header() -> None:
 def test_payment_method_exposes_reserve_pay_member() -> None:
     assert PaymentMethod.RESERVE_PAY.value == "RESERVE_PAY"
     assert PaymentMethod.OTM.value == "OTM"
+    assert PaymentMethod.WALLET.value == "WALLET"
     assert not hasattr(PaymentMethod, "UPI_RESERVE_PAY")
 
 
@@ -123,6 +124,39 @@ def test_server_verifies_otm_payment_method_when_advertised() -> None:
     assert challenge.request.availablePaymentMethods == [PaymentMethod.OTM]
     assert result.valid is True
     assert result.credential.payload.payment_method == PaymentMethod.OTM
+
+
+def test_server_verifies_wallet_credential_when_advertised() -> None:
+    server = PineLabsOnlineP3P.create(
+        PineLabsOnlineServerConfig(
+            clientId="server-id",
+            clientSecret="server-secret",
+            merchantId="merchant-test",
+            paymentGateway=PaymentGateway.PineLabsOnline,
+            availablePaymentMethods=[PaymentMethod.WALLET],
+            realm=P3PEnvironment.SANDBOX,
+            env=P3PEnvironment.SANDBOX,
+        )
+    )
+    challenge = server.generate_challenge(
+        ChargeOptions(amount=Amount(value=100, currency="INR"), resource="/api/google-pay")
+    ).challenge
+    credential = {
+        "challenge": asdict(challenge),
+        "source": "client-client",
+        "payload": {
+            "type": "token",
+            "token": "MPP_TOK_GOOGLE_PAY",
+            "payment_method": "WALLET",
+            "payment_method_reference_id": "auth_google_pay_123",
+        },
+    }
+
+    result = server.verify_credential(f"Payment {encode_json(credential)}")
+
+    assert result.valid is True
+    assert result.credential.payload.payment_method == PaymentMethod.WALLET
+    assert result.credential.payload.payment_method_reference_id == "auth_google_pay_123"
 
 
 def test_decide_payment_propagates_upstream_capture_failures(monkeypatch) -> None:

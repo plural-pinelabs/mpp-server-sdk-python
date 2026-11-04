@@ -242,6 +242,77 @@ def test_capture_client_rejects_credit_emi_without_pre_authorization_reference_b
     assert transport.requests == []
 
 
+def test_capture_client_sends_google_pay_wallet_debit_with_pre_authorization_reference() -> None:
+    class _WalletDebitTransport(httpx.BaseTransport):
+        def __init__(self) -> None:
+            self.requests: list[httpx.Request] = []
+
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            self.requests.append(request)
+            if request.url.path.endswith("/api/auth/v1/token"):
+                return httpx.Response(200, json={"data": {"access_token": "server-access-token", "expires_in": 300}})
+            assert json.loads(request.content.decode() or "{}") == {
+                "payment_method": "WALLET",
+                "customer": {"mobile_number": "9876543210"},
+                "payment_amount": {"value": 300, "currency": "INR"},
+                "payment_token": "P3P_TOK_GOOGLE_PAY_123",
+                "challenge_id": "ch_google_pay_123",
+                "payment_method_reference_id": "auth_google_pay_123",
+            }
+            return httpx.Response(200, json={"data": {
+                "payment_method": "WALLET",
+                "payment_method_reference_id": "auth_google_pay_123",
+                "merchant_payment_debit_reference": "debit-google-pay-123",
+                "status": "PROCESSED",
+            }})
+
+    transport = _WalletDebitTransport()
+    capture = CaptureClient(PineLabsOnlineServerConfig(
+        clientId="server-client",
+        clientSecret="server-secret",
+        merchantId="merchant-test",
+        paymentGateway=PaymentGateway.PineLabsOnline,
+        availablePaymentMethods=[PaymentMethod.WALLET],
+        env="http://localhost:8081",
+    ), http_client=httpx.Client(transport=transport))
+
+    result = capture.capture(CaptureOptions(
+        token="P3P_TOK_GOOGLE_PAY_123",
+        amount=Amount(value=300, currency="INR"),
+        paymentMethod=PaymentMethod.WALLET,
+        paymentMethodReferenceId="auth_google_pay_123",
+        mobileNumber="9876543210",
+        challengeId="ch_google_pay_123",
+        idempotencyKey="debit-google-pay-123",
+    ))
+
+    assert result.payment_method == "WALLET"
+    assert result.payment_method_reference_id == "auth_google_pay_123"
+
+
+def test_capture_client_rejects_wallet_without_pre_authorization_reference_before_network() -> None:
+    transport = _RecordingTransport()
+    capture = CaptureClient(PineLabsOnlineServerConfig(
+        clientId="server-client",
+        clientSecret="server-secret",
+        merchantId="merchant-test",
+        paymentGateway=PaymentGateway.PineLabsOnline,
+        availablePaymentMethods=[PaymentMethod.WALLET],
+        env="http://localhost:8081",
+    ), http_client=httpx.Client(transport=transport))
+
+    with pytest.raises(P3PCaptureError, match="paymentMethodReferenceId is required for WALLET"):
+        capture.capture(CaptureOptions(
+            token="P3P_TOK_GOOGLE_PAY_123",
+            amount=Amount(value=300, currency="INR"),
+            paymentMethod=PaymentMethod.WALLET,
+            mobileNumber="9876543210",
+            challengeId="ch_google_pay_123",
+        ))
+
+    assert transport.requests == []
+
+
 def test_capture_client_keeps_payment_method_from_upstream_response() -> None:
     class _PaymentMethodTransport(httpx.BaseTransport):
         def handle_request(self, request: httpx.Request) -> httpx.Response:

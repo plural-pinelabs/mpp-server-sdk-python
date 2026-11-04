@@ -36,8 +36,8 @@ config = PineLabsOnlineServerConfig(
 
 `clientId`, `clientSecret`, and `merchantId` are mandatory. The client
 credentials are used internally for `POST /api/auth/v1/token`; `merchantId`
-is sent as `Merchant-ID` on MPP calls for `RESERVE_PAY`, `OTM`, `CARD`, and
-`CREDIT_EMI`. Missing MID is rejected while creating the SDK, before any
+is sent as `Merchant-ID` on MPP calls for `RESERVE_PAY`, `OTM`, `CARD`,
+`CREDIT_EMI`, and `WALLET`. Missing MID is rejected while creating the SDK, before any
 network call.
 The local challenge HMAC key is derived internally from `clientSecret` with a
 stable SDK prefix, so there is no separate challenge-signing config field.
@@ -101,6 +101,25 @@ metadata wire field; do not base64-encode it or include unselected entities,
 tenures, or offers.
 `PaymentMethod.CREDIT_EMI` is preserved as `payment_method: "CREDIT_EMI"` in
 the Pine pre-authorization request; the SDK never changes it to `CARD`.
+
+### Google Pay Wallet
+
+Google Pay is modelled as the `WALLET` payment method with a fixed wallet
+provider. Create its pre-authorization with `wallet_code: "GOOGLE_PAY"`:
+
+```python
+pre_auth = p3p.create_pre_authorization(CreatePreAuthorizationOptions(
+    paymentMethod=PaymentMethod.WALLET,
+    paymentMethodOptions={"wallet_code": "GOOGLE_PAY"},
+    mobileNumber="9876543210",
+    amount=Amount(value=50000, currency="INR"),
+    validityInDays=7,
+))
+```
+
+Wallet pre-authorization returns a hosted checkout URL. After Google Pay is
+authorized, pass the returned `payment_method_reference_id` into capture; the
+SDK rejects Wallet capture without it.
 
 ### End-to-End Card Payment
 

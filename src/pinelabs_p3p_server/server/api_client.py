@@ -33,6 +33,7 @@ from ..utils.validation import (
     validate_create_mandate_options,
     validate_create_mandate_revoke_options,
     validate_mandate_balance_lookup_options,
+    validate_wallet_payment_method_options,
 )
 from ..types.payment import PaymentMethod
 from ..types.orders import CreateRefundOptions, Order, Refund
@@ -76,6 +77,12 @@ class ApiClient:
         validate_create_mandate_options(options)
         mobile_number = normalize_mobile_number(options.mobileNumber or "")
         payment_method = options.paymentMethod or self._config.availablePaymentMethods[0]
+        payment_method_options = (
+            options.paymentMethodOptions
+            if options.paymentMethodOptions is not None
+            else options.payment_method_options
+        )
+        validate_wallet_payment_method_options(payment_method, payment_method_options)
         body: Dict[str, Any] = {
             "payment_method": _payment_method_value(payment_method).upper(),
             "customer": _customer_payload(mobile_number),
@@ -84,11 +91,6 @@ class ApiClient:
         }
         if options.description:
             body["description"] = options.description
-        payment_method_options = (
-            options.paymentMethodOptions
-            if options.paymentMethodOptions is not None
-            else options.payment_method_options
-        )
         if payment_method_options is not None:
             body["payment_method_options"] = payment_method_options
         merchant_metadata = (
@@ -271,7 +273,7 @@ def _merchant_metadata_payload(metadata: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _is_redirect_payment_method(value: Any) -> bool:
-    return _payment_method_value(value).upper() in ("CARD", "CREDIT_EMI")
+    return _payment_method_value(value).upper() in ("CARD", "CREDIT_EMI", "WALLET")
 
 
 def _amount_int(value: Any) -> int:
@@ -402,4 +404,6 @@ def _payment_method_enum(value: Any) -> PaymentMethod:
         return PaymentMethod.OTM
     if value == PaymentMethod.CREDIT_EMI.value:
         return PaymentMethod.CREDIT_EMI
+    if value == PaymentMethod.WALLET.value:
+        return PaymentMethod.WALLET
     return PaymentMethod.Crypto if value == PaymentMethod.Crypto.value else PaymentMethod.RESERVE_PAY
