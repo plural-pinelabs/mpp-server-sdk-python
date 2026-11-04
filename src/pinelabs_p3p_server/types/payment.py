@@ -14,6 +14,7 @@ class PaymentMethod(str, Enum):
     OTM = "OTM"
     CARD = "CARD"
     CREDIT_EMI = "CREDIT_EMI"
+    WALLET = "WALLET"
     Crypto = "CRYPTO"
 
 

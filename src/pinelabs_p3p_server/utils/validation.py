@@ -55,7 +55,13 @@ def validate_config(config: PineLabsOnlineServerConfig) -> None:
 
 
 def is_supported_payment_method(value: object) -> bool:
-    return value in (PaymentMethod.RESERVE_PAY, PaymentMethod.OTM, PaymentMethod.CARD, PaymentMethod.CREDIT_EMI)
+    return value in (
+        PaymentMethod.RESERVE_PAY,
+        PaymentMethod.OTM,
+        PaymentMethod.CARD,
+        PaymentMethod.CREDIT_EMI,
+        PaymentMethod.WALLET,
+    )
 
 
 def validate_create_mandate_options(options: CreateMandateOptions) -> None:
@@ -75,6 +81,20 @@ def validate_create_mandate_options(options: CreateMandateOptions) -> None:
         raise ValueError("CreateMandateOptions: validityInDays must be a positive integer")
     if options.paymentMethod is not None and not is_supported_payment_method(options.paymentMethod):
         raise _unsupported_payment_method_error("CreateMandateOptions: paymentMethod", options.paymentMethod)
+    validate_wallet_payment_method_options(
+        options.paymentMethod,
+        options.paymentMethodOptions if options.paymentMethodOptions is not None else options.payment_method_options,
+    )
+
+
+def validate_wallet_payment_method_options(payment_method: object, payment_method_options: object) -> None:
+    """Ensure the SDK exposes only the Google Pay Wallet provider."""
+    if payment_method != PaymentMethod.WALLET:
+        return
+    if not isinstance(payment_method_options, dict):
+        raise ValueError("CreateMandateOptions: paymentMethodOptions is required for WALLET")
+    if payment_method_options.get("wallet_code") != "GOOGLE_PAY":
+        raise ValueError("CreateMandateOptions: WALLET requires paymentMethodOptions.wallet_code to be GOOGLE_PAY")
 
 
 def validate_mandate_balance_lookup_options(options: MandateBalanceLookupOptions) -> None:
@@ -115,4 +135,4 @@ def validate_create_mandate_revoke_options(options: CreateMandateRevokeOptions) 
 def _unsupported_payment_method_error(context: str, value: object) -> ValueError:
     if value == PaymentMethod.Crypto:
         return ValueError(f"{context}: PaymentMethod.Crypto is currently not supported in SDKs")
-    return ValueError(f"{context}: payment method must be RESERVE_PAY, OTM, CARD, or CREDIT_EMI")
+    return ValueError(f"{context}: payment method must be RESERVE_PAY, OTM, CARD, CREDIT_EMI, or WALLET")

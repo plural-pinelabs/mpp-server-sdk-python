@@ -56,8 +56,10 @@ class CaptureClient:
         mobile_number = _resolve_mobile_number(options)
         challenge_id = _resolve_challenge_id(options)
         payment_method_reference_id = _resolve_payment_method_reference_id(options)
-        if options.paymentMethod == PaymentMethod.CREDIT_EMI and not payment_method_reference_id:
-            raise P3PCaptureError("CaptureOptions: paymentMethodReferenceId is required for CREDIT_EMI")
+        if options.paymentMethod in (PaymentMethod.CREDIT_EMI, PaymentMethod.WALLET) and not payment_method_reference_id:
+            raise P3PCaptureError(
+                f"CaptureOptions: paymentMethodReferenceId is required for {options.paymentMethod.value}"
+            )
         auth_token = self._auth.get_access_token()
         headers = {
             "Content-Type": "application/json",
@@ -204,7 +206,7 @@ def _payment_method_value(value: Any) -> str:
 def _unsupported_payment_method_message(context: str, value: Any) -> str:
     if value == PaymentMethod.Crypto:
         return f"{context}: PaymentMethod.Crypto is currently not supported in SDKs"
-    return f"{context}: payment method must be RESERVE_PAY, OTM, CARD, or CREDIT_EMI"
+    return f"{context}: payment method must be RESERVE_PAY, OTM, CARD, CREDIT_EMI, or WALLET"
 
 
 def _effective_max_retries(value: Optional[int]) -> int:
